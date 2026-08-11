@@ -1,0 +1,12 @@
+[package]
+name = "execlab-core"
+version = "0.1.0"
+edition = "2021"
+
+# NOTE: no hftbacktest dependency, on purpose. `core` holds the data CONTRACT
+# (what a SessionRow is, what a Manifest is) — not how results are produced.
+# Anything needing the engine lives in `sweep`.
+[dependencies]
+serde      = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["preserve_order"] }
+blake3     = "1"

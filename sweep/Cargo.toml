@@ -1,0 +1,27 @@
+[package]
+name = "execlab"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+execlab-core = { path = "../core" }
+
+# `backtest` only: the default features include `live`, which pulls in iceoryx2
+# (an IPC transport) whose build script needs libclang/bindgen. We don't need it
+# yet. When we do go live, re-enable `live` and install `libclang-dev`.
+hftbacktest = { path = "../../hftbacktest", default-features = false, features = ["backtest"] }
+
+serde      = { version = "1", features = ["derive"] }
+serde_json = "1"
+rayon      = "1"
+blake3     = "1"
+
+# TODO: parquet writing for the tier-A rows. Deliberately not pinned yet —
+# arrow/parquet 53 breaks against chrono >= 0.4.42 (both define
+# `Datelike::quarter`). Add at a current version when we implement
+# output::write_combination properly; JSON placeholder until then.
+# arrow   = "56"
+# parquet = "56"
+
+[build-dependencies]
+blake3 = "1"

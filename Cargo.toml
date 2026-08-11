@@ -1,0 +1,11 @@
+[workspace]
+resolver = "2"
+members = ["core", "sweep", "viz"]
+#
+# Dependency direction is enforced by Cargo:
+#     sweep   -> core
+# `core` is deliberately thin — the data contract only.
+
+[profile.release]
+opt-level = 3
+lto = true

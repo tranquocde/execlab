@@ -1,0 +1,17 @@
+# Build artifacts
+/target/
+
+# Sweep results — regenerable from (code_hash, params, data) by design.
+# The whole point of the deterministic pipeline is that these need not be
+# versioned: re-running reproduces them.
+/output/
+
+# Session data (npz). Large, and lives upstream in polyhbt/, not here.
+/data/
+
+# Atomic-write leftovers from a killed run
+*.tmp
+
+# Editor swap files
+*.swp
+*.swo
