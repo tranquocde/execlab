@@ -82,10 +82,7 @@ fn main() {
                 "{s:<20} -- already complete; replay skipped -> {}",
                 result.path.display()
             ),
-            Ok(result) => println!(
-                "{s:<20} -- replay complete -> {}",
-                result.path.display()
-            ),
+            Ok(result) => println!("{s:<20} -- replay complete -> {}", result.path.display()),
             Err(msg) => {
                 eprintln!("{s:<20} !! {msg}");
                 failures += 1;

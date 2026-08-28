@@ -31,10 +31,10 @@ fn normalize(src: &str) -> String {
 /// Cost: touching `row.rs` invalidates EVERY alpha. That is correct — the
 /// numbers really did all change.
 const RESULT_AFFECTING: &[&str] = &[
-    "src/engine.rs",      // fees, latency, queue model, exchange kind, tick/lot
-    "src/extract.rs",     // pnl and settle
+    "src/engine.rs",         // fees, latency, queue model, exchange kind, tick/lot
+    "src/extract.rs",        // pnl and settle
     "src/sweep_observer.rs", // sweep activity counters
-    "../core/src/row.rs", // the row schema itself
+    "../core/src/row.rs",    // the row schema itself
 ];
 
 fn main() {
@@ -48,24 +48,50 @@ fn main() {
     }
     let shared = shared.finalize();
 
-    let mut found: Vec<(String, String)> = fs::read_dir("src/alphas")
+    let mut found: Vec<(String, String, String, String)> = fs::read_dir("src/alphas")
         .expect("src/alphas missing")
         .filter_map(|entry| {
             let path = entry.ok()?.path();
-            let stem = path.file_stem()?.to_str()?.to_string();
-            if path.extension()? != "rs" || stem == "mod" {
-                return None;
+            let (name, source, config) = if path.is_dir() {
+                let name = path.file_name()?.to_str()?.to_string();
+                (
+                    name.clone(),
+                    path.join(format!("{name}.rs")),
+                    path.join(format!("{name}.json")),
+                )
+            } else {
+                let stem = path.file_stem()?.to_str()?.to_string();
+                if path.extension()? != "rs" || stem == "mod" {
+                    return None;
+                }
+                (
+                    stem.clone(),
+                    path,
+                    Path::new("src/alphas").join(format!("{stem}.json")),
+                )
+            };
+            if !source.is_file() {
+                panic!("alpha {name} is missing {}", source.display());
             }
-            println!("cargo:rerun-if-changed={}", path.display());
+            if !config.is_file() {
+                panic!("alpha {name} is missing {}", config.display());
+            }
+            println!("cargo:rerun-if-changed={}", source.display());
+            println!("cargo:rerun-if-changed={}", config.display());
 
-            let src = fs::read_to_string(&path).ok()?;
+            let src = fs::read_to_string(&source).ok()?;
 
             // alpha logic + shared result-affecting code
             let mut h = blake3::Hasher::new();
             h.update(normalize(&src).as_bytes());
             h.update(shared.as_bytes());
 
-            Some((stem, h.finalize().to_hex()[..8].to_string()))
+            Some((
+                name,
+                h.finalize().to_hex()[..8].to_string(),
+                source.to_string_lossy().into_owned(),
+                config.to_string_lossy().into_owned(),
+            ))
         })
         .collect();
     found.sort();
@@ -76,15 +102,17 @@ fn main() {
     let manifest_dir = env::var("CARGO_MANIFEST_DIR").unwrap();
     let mods = found
         .iter()
-        .map(|(name, _)| {
-            format!("#[path = \"{manifest_dir}/src/alphas/{name}.rs\"]\npub mod {name};")
+        .map(|(name, _, source, _)| {
+            format!("#[path = \"{manifest_dir}/{source}\"]\npub mod {name};")
         })
         .collect::<Vec<_>>()
         .join("\n");
 
     let entries = found
         .iter()
-        .map(|(name, hash)| format!("        crate::entry::<{name}::A>(\"{name}\", \"{hash}\"),"))
+        .map(|(name, hash, _, config)| format!(
+            "        crate::entry::<{name}::A>(\"{name}\", \"{hash}\", include_str!(\"{manifest_dir}/{config}\")),"
+        ))
         .collect::<Vec<_>>()
         .join("\n");
 
@@ -93,8 +121,8 @@ fn main() {
     // guarantees byte-identical text — no Rust parsing, nothing to drift.
     let sources = found
         .iter()
-        .map(|(name, _)| {
-            format!("        \"{name}\" => include_str!(\"{manifest_dir}/src/alphas/{name}.rs\"),")
+        .map(|(name, _, source, _)| {
+            format!("        \"{name}\" => include_str!(\"{manifest_dir}/{source}\"),")
         })
         .collect::<Vec<_>>()
         .join("\n");

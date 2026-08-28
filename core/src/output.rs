@@ -28,8 +28,8 @@ use crate::row::SessionRow;
 /// Canonical JSON matters: `1e7` and `10000000.0` must not produce different
 /// directories. `code_hash` comes from build.rs and only moves when the logic
 /// moves, so comment edits do not orphan the tree.
-pub fn param_hash<P: Serialize>(code_hash: &str, p: &P) -> String {
-    let json = serde_json::to_string(&(code_hash, p)).unwrap();
+pub fn param_hash<P: Serialize, C: Serialize>(code_hash: &str, p: &P, config: &C) -> String {
+    let json = serde_json::to_string(&(code_hash, p, config)).unwrap();
     blake3::hash(json.as_bytes()).to_hex()[..8].to_string()
 }
 
@@ -158,7 +158,7 @@ pub fn write_combination<P: Serialize>(
     let n_failed = rows.iter().filter(|r| r.error.is_some()).count();
     let manifest = Manifest {
         alpha: alpha.into(),
-        hash: param_hash(code_hash, params),
+        hash: param_hash(code_hash, params, &backtest_config),
         params: serde_json::to_value(params).unwrap(),
         backtest_config,
         code_hash: code_hash.into(),

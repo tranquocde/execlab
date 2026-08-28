@@ -22,16 +22,68 @@ use hftbacktest::{
     types::{ElapseResult, Event, OrdType, Order, OrderId, OrderRequest, StateValues, TimeInForce},
 };
 
-use super::record::{Fill, Sample};
+use super::record::{BookLevel, Fill, Sample};
 
-trait EffectiveDepthAccess {
+trait ReplayDepthAccess {
+    fn replay_depth(&self, asset_no: usize) -> &HashMapMarketDepth;
     fn effective_depth(&self, asset_no: usize) -> Option<&HashMapMarketDepth>;
 }
 
-impl<MD: MarketDepth> EffectiveDepthAccess for Backtest<MD> {
+impl ReplayDepthAccess for Backtest<HashMapMarketDepth> {
+    fn replay_depth(&self, asset_no: usize) -> &HashMapMarketDepth {
+        Backtest::depth(self, asset_no)
+    }
+
     fn effective_depth(&self, asset_no: usize) -> Option<&HashMapMarketDepth> {
         Backtest::effective_depth(self, asset_no)
     }
+}
+
+const BOOK_LEVELS: usize = 3;
+
+fn top_levels(depth: &HashMapMarketDepth) -> (Vec<BookLevel>, Vec<BookLevel>) {
+    let best_bid = opt(depth.best_bid());
+    let best_ask = opt(depth.best_ask());
+    let mut bids = depth
+        .bid_depth
+        .iter()
+        // Crossing updates can leave entries in the map that are outside the
+        // engine's current logical book. Match HashMapMarketDepth::snapshot():
+        // only levels at or below the logical best bid are visible.
+        .filter(|(tick, qty)| {
+            best_bid.is_some()
+                && **qty > 0.0
+                && **tick <= depth.best_bid_tick
+                && best_ask.is_none_or(|_| **tick < depth.best_ask_tick)
+        })
+        .map(|(tick, qty)| (*tick, *qty))
+        .collect::<Vec<_>>();
+    bids.sort_unstable_by(|a, b| b.0.cmp(&a.0));
+    let mut asks = depth
+        .ask_depth
+        .iter()
+        // Likewise, asks crossed by a newer bid remain stored but are no longer
+        // logically visible until the engine advances best_ask_tick again.
+        .filter(|(tick, qty)| {
+            best_ask.is_some()
+                && **qty > 0.0
+                && **tick >= depth.best_ask_tick
+                && best_bid.is_none_or(|_| **tick > depth.best_bid_tick)
+        })
+        .map(|(tick, qty)| (*tick, *qty))
+        .collect::<Vec<_>>();
+    asks.sort_unstable_by_key(|level| level.0);
+    let convert = |levels: Vec<(i64, f64)>| {
+        levels
+            .into_iter()
+            .take(BOOK_LEVELS)
+            .map(|(tick, qty)| BookLevel {
+                px: tick as f64 * depth.tick_size,
+                qty,
+            })
+            .collect()
+    };
+    (convert(bids), convert(asks))
 }
 
 pub struct Observed<B> {
@@ -45,6 +97,7 @@ pub struct Observed<B> {
     pub fills: Vec<Fill>,
     pub curve: Vec<Sample>,
     pub max_inventory: f64,
+    pub arrival_mid_price: Option<f64>,
 }
 
 impl<B> Observed<B> {
@@ -55,6 +108,7 @@ impl<B> Observed<B> {
             fills: Vec::new(),
             curve: Vec::new(),
             max_inventory: 0.0,
+            arrival_mid_price: None,
         }
     }
 }
@@ -69,7 +123,7 @@ impl<B> Observed<B> {
     fn sample<MD>(&mut self)
     where
         MD: MarketDepth,
-        B: Bot<MD> + EffectiveDepthAccess,
+        B: Bot<MD> + ReplayDepthAccess,
     {
         let ts = self.inner.current_timestamp();
         let sv = self.inner.state_values(0);
@@ -124,17 +178,23 @@ impl<B> Observed<B> {
         self.fills.extend(new_fills);
 
         // ---- state snapshot ----
-        let depth = self.inner.depth(0);
+        let depth = self.inner.replay_depth(0);
         let (bid, ask) = (opt(depth.best_bid()), opt(depth.best_ask()));
-        let (effective_bid, effective_ask) = self
-            .inner
-            .effective_depth(0)
+        let (bids, asks) = top_levels(depth);
+        let effective_depth = self.inner.effective_depth(0);
+        let (effective_bid, effective_ask) = effective_depth
             .map(|depth| (opt(depth.best_bid()), opt(depth.best_ask())))
             .unwrap_or((None, None));
-        let mid = match (bid, ask) {
+        let (effective_bids, effective_asks) = effective_depth.map(top_levels).unwrap_or_default();
+        let reference_price = match (bid, ask) {
             (Some(b), Some(a)) => Some((b + a) / 2.0),
-            _ => None,
+            (Some(b), None) => Some(b),
+            (None, Some(a)) => Some(a),
+            (None, None) => None,
         };
+        if self.arrival_mid_price.is_none() {
+            self.arrival_mid_price = reference_price;
+        }
 
         if position.abs() > self.max_inventory {
             self.max_inventory = position.abs();
@@ -146,12 +206,16 @@ impl<B> Observed<B> {
             ask,
             effective_bid,
             effective_ask,
+            bids,
+            asks,
+            effective_bids,
+            effective_asks,
             my_bid,
             my_ask,
             position,
             balance,
             fee,
-            equity: mid.map(|m| balance + position * m - fee),
+            equity: reference_price.map(|price| balance + position * price - fee),
         });
     }
 }
@@ -163,7 +227,7 @@ impl<B> Observed<B> {
 impl<MD, B> Bot<MD> for Observed<B>
 where
     MD: MarketDepth,
-    B: Bot<MD> + EffectiveDepthAccess,
+    B: Bot<MD> + ReplayDepthAccess,
 {
     type Error = B::Error;
 

@@ -20,66 +20,96 @@ use hftbacktest::{
     backtest::{
         assettype::LinearAsset,
         data::{read_npz_file, Data},
-        models::{
-            CommonFees, ConstantLatency, RiskAdverseQueueModel, TradingValueFeeModel,
-        },
+        models::{CommonFees, ConstantLatency, RiskAdverseQueueModel, TradingValueFeeModel},
         Backtest, DataSource, ExchangeKind, L2AssetBuilder,
     },
     prelude::HashMapMarketDepth,
     types::Event,
 };
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 // Real tick size for these Polymarket binary markets is 0.01.
 const TICK_SIZE: f64 = 0.01;
 const LOT_SIZE: f64 = 0.001;
 
-#[derive(Clone, Copy, Serialize)]
+#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
+pub enum TerminalValuation {
+    BinarySettlement,
+    FinalMidPrice,
+}
+
+impl Default for TerminalValuation {
+    fn default() -> Self {
+        Self::BinarySettlement
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct BacktestConfig {
-    pub exchange: &'static str,
-    pub queue_model: &'static str,
-    pub asset_type: &'static str,
+    pub exchange: String,
+    pub queue_model: String,
+    pub asset_type: String,
     pub contract_size: f64,
     pub tick_size: f64,
     pub lot_size: f64,
-    pub latency_model: &'static str,
+    pub latency_model: String,
     pub entry_latency_ns: i64,
     pub response_latency_ns: i64,
-    pub fee_model: &'static str,
+    pub fee_model: String,
     pub maker_fee: f64,
     pub taker_fee: f64,
     pub initial_balance: f64,
     pub initial_position: f64,
     pub last_trades_capacity: usize,
+    #[serde(default)]
+    pub terminal_valuation: TerminalValuation,
 }
 
 /// Single source of truth for HBT construction and output metadata.
-pub const BACKTEST_CONFIG: BacktestConfig = BacktestConfig {
-    exchange: "EffectivePartialFillExchange",
-    queue_model: "RiskAdverseQueueModel",
-    asset_type: "LinearAsset",
-    contract_size: 1.0,
-    tick_size: TICK_SIZE,
-    lot_size: LOT_SIZE,
-    latency_model: "ConstantLatency",
-    entry_latency_ns: 10_000_000,
-    response_latency_ns: 10_000_000,
-    fee_model: "TradingValueFeeModel<CommonFees>",
-    maker_fee: 0.005,
-    taker_fee: 0.005,
-    initial_balance: 0.0,
-    initial_position: 100_000.0,
-    last_trades_capacity: 1_000,
-};
+impl Default for BacktestConfig {
+    fn default() -> Self {
+        Self {
+            exchange: "EffectivePartialFillExchange".into(),
+            queue_model: "RiskAdverseQueueModel".into(),
+            asset_type: "LinearAsset".into(),
+            contract_size: 1.0,
+            tick_size: TICK_SIZE,
+            lot_size: LOT_SIZE,
+            latency_model: "ConstantLatency".into(),
+            entry_latency_ns: 10_000_000,
+            response_latency_ns: 10_000_000,
+            fee_model: "TradingValueFeeModel<CommonFees>".into(),
+            maker_fee: 0.005,
+            taker_fee: 0.005,
+            initial_balance: 0.0,
+            initial_position: 100_000.0,
+            last_trades_capacity: 1_000,
+            terminal_valuation: TerminalValuation::BinarySettlement,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct AlphaRunConfig {
+    pub data_dir: String,
+    pub output_dir: String,
+    pub backtest_config: BacktestConfig,
+}
+
+impl AlphaRunConfig {
+    pub fn from_json(json: &str) -> Result<Self, String> {
+        serde_json::from_str(json).map_err(|error| format!("invalid alpha config: {error}"))
+    }
+}
 
 pub fn backtest_config() -> serde_json::Value {
-    serde_json::to_value(BACKTEST_CONFIG).unwrap()
+    serde_json::to_value(BacktestConfig::default()).unwrap()
 }
 
 /// Lifted from `record_only_backtest.rs:61`, with `File` swapped for `Data`.
-pub fn build_backtest(data: Data<Event>) -> Backtest<HashMapMarketDepth> {
-    let config = BACKTEST_CONFIG;
-    let exchange = match config.exchange {
+pub fn build_backtest(data: Data<Event>, config: &BacktestConfig) -> Backtest<HashMapMarketDepth> {
+    let (tick_size, lot_size) = (config.tick_size, config.lot_size);
+    let exchange = match config.exchange.as_str() {
         "PartialFillExchange" => ExchangeKind::PartialFillExchange,
         "NoPartialFillExchange" => ExchangeKind::NoPartialFillExchange,
         "EffectivePartialFillExchange" => ExchangeKind::EffectivePartialFillExchange,
@@ -104,7 +134,7 @@ pub fn build_backtest(data: Data<Event>) -> Backtest<HashMapMarketDepth> {
                 .last_trades_capacity(config.last_trades_capacity)
                 .initial_balance(config.initial_balance)
                 .initial_position(config.initial_position)
-                .depth(move || HashMapMarketDepth::new(config.tick_size, config.lot_size))
+                .depth(move || HashMapMarketDepth::new(tick_size, lot_size))
                 .build()
                 .unwrap(),
         )

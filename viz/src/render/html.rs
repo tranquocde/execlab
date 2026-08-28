@@ -423,7 +423,7 @@ const LAZY_CLIENT: &str = r#"
     }
 
     async function loadMeta() {
-      const meta = await fetchJson('/api/meta');
+      const meta = await fetchJson(`/api/meta?refresh=${Date.now()}`);
       byId('strategy-count').textContent = `Strategies: ${meta.strategies}`;
       byId('asset-count').textContent = `Assets: ${meta.assets}`;
       byId('interval-count').textContent = `Intervals: ${meta.intervals}`;
@@ -432,6 +432,7 @@ const LAZY_CLIENT: &str = r#"
         const item = document.createElement('div'); item.className = 'warning';
         item.textContent = warning; root.appendChild(item);
       });
+      return meta;
     }
 
     async function loadStrategies() {
@@ -598,7 +599,14 @@ const LAZY_CLIENT: &str = r#"
 
     async function start() {
       try {
-        await Promise.all([loadMeta(), loadStrategies(), loadSource()]);
+        const meta = await loadMeta();
+        if (meta.strategies === 0) {
+          byId('selected-strategy').textContent = 'Waiting for completed sweep batch…';
+          setTimeout(init, 1000);
+          return;
+        }
+        await loadStrategies();
+        await loadSource();
         await loadAssets();
       } catch (error) {
         const item = document.createElement('div'); item.className = 'warning';

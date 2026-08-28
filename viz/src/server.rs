@@ -23,6 +23,62 @@ use crate::{
 
 type ReplayJobs = Mutex<HashMap<String, String>>;
 
+pub(crate) struct EmbeddedView {
+    report: RwLock<Report>,
+    html: String,
+    data_root: RwLock<PathBuf>,
+    outputs: RwLock<Vec<String>>,
+    jobs: Arc<ReplayJobs>,
+}
+
+impl EmbeddedView {
+    pub(crate) fn new(outputs: Vec<String>, data_root: PathBuf, html: String) -> Self {
+        let report = process::output_process(&outputs).unwrap_or_else(|error| Report {
+            strategies: Vec::new(),
+            warnings: vec![format!("results not available yet: {error}")],
+        });
+        Self {
+            report: RwLock::new(report),
+            html,
+            data_root: RwLock::new(data_root),
+            outputs: RwLock::new(outputs),
+            jobs: Arc::new(Mutex::new(HashMap::new())),
+        }
+    }
+
+    pub(crate) fn reconfigure(&self, output: PathBuf, data_root: PathBuf) {
+        let outputs = vec![output.to_string_lossy().into_owned()];
+        *self.outputs.write().unwrap() = outputs.clone();
+        *self.data_root.write().unwrap() = data_root;
+        *self.report.write().unwrap() =
+            process::output_process(&outputs).unwrap_or_else(|error| Report {
+                strategies: Vec::new(),
+                warnings: vec![format!("results not available yet: {error}")],
+            });
+    }
+
+    pub(crate) fn respond(&self, method: &str, target: &str) -> (u16, &'static str, Vec<u8>) {
+        let mapped = if target == "/results" { "/" } else { target };
+        let page_path = mapped.split('?').next().unwrap_or(mapped);
+        if method == "GET"
+            && matches!(
+                page_path,
+                "/" | "/api/meta" | "/asset-comparison" | "/session-replay"
+            )
+        {
+            let outputs = self.outputs.read().unwrap().clone();
+            let fresh = process::output_process(&outputs).unwrap_or_else(|error| Report {
+                strategies: Vec::new(),
+                warnings: vec![format!("waiting for sweep output: {error}")],
+            });
+            *self.report.write().unwrap() = fresh;
+        }
+        let report = self.report.read().unwrap();
+        let data_root = self.data_root.read().unwrap();
+        route(method, mapped, &report, &self.html, &data_root, &self.jobs)
+    }
+}
+
 struct ReplayTarget {
     key: String,
     identity: String,
@@ -43,7 +99,9 @@ fn replay_target(report: &Report, query: &HashMap<String, String>) -> Result<Rep
     let asset = asset_index
         .and_then(|index: usize| strategy.assets.get(index))
         .ok_or("invalid asset")?;
-    let interval = asset.intervals.iter()
+    let interval = asset
+        .intervals
+        .iter()
         .find(|interval| interval.session_id == *session_id)
         .ok_or("invalid session")?;
     let strategy_dir = PathBuf::from(&strategy.source_path);
@@ -108,7 +166,11 @@ fn parse_target(target: &str) -> (&str, HashMap<String, String>) {
 }
 
 fn json_response(value: serde_json::Value) -> (u16, &'static str, Vec<u8>) {
-    (200, "application/json; charset=utf-8", value.to_string().into_bytes())
+    (
+        200,
+        "application/json; charset=utf-8",
+        value.to_string().into_bytes(),
+    )
 }
 
 fn json_error(status: u16, error: String) -> (u16, &'static str, Vec<u8>) {
@@ -153,7 +215,11 @@ fn sort_values(
     let descending = query.get("order").is_some_and(|order| order == "desc");
     items.sort_by(|left, right| {
         let order = compare_json(value_at(left, path), value_at(right, path));
-        if descending { order.reverse() } else { order }
+        if descending {
+            order.reverse()
+        } else {
+            order
+        }
     });
 }
 
@@ -197,8 +263,7 @@ fn route(
             }
             match fs::read_to_string(&target.replay_file) {
                 Ok(content) => match serde_json::from_str::<serde_json::Value>(&content) {
-                    Ok(replay) => {
-                    json_response(json!({
+                    Ok(replay) => json_response(json!({
                         "identity": target.identity,
                         "interval": target.interval,
                         "exists": true,
@@ -217,8 +282,7 @@ fn route(
                             "samples_taken": replay["samples_taken"],
                         },
                         "verify": replay["verify"],
-                    }))
-                    }
+                    })),
                     Err(error) => json_error(500, format!("cannot parse replay: {error}")),
                 },
                 Err(error) => json_error(500, format!("cannot read replay: {error}")),
@@ -241,19 +305,33 @@ fn route(
                 Some(fills) => fills.clone(),
                 None => return json_error(500, "replay has no fills array".into()),
             };
-            sort_values(&mut fills, &query, &[
-                ("ts", "ts"), ("ts_local", "ts_local"), ("order_id", "order_id"),
-                ("side", "side"), ("px", "px"), ("qty", "qty"), ("maker", "maker"),
-                ("position", "position"), ("balance", "balance"), ("fee", "fee"),
-            ]);
+            sort_values(
+                &mut fills,
+                &query,
+                &[
+                    ("ts", "ts"),
+                    ("ts_local", "ts_local"),
+                    ("order_id", "order_id"),
+                    ("side", "side"),
+                    ("px", "px"),
+                    ("qty", "qty"),
+                    ("maker", "maker"),
+                    ("position", "position"),
+                    ("balance", "balance"),
+                    ("fee", "fee"),
+                ],
+            );
             let (page, size, start, end) = page_bounds(fills.len(), &query);
-            json_response(serde_json::to_value(Page {
-                items: fills[start..end].to_vec(),
-                page,
-                page_size: size,
-                total: fills.len(),
-                pages: fills.len().div_ceil(size).max(1),
-            }).unwrap())
+            json_response(
+                serde_json::to_value(Page {
+                    items: fills[start..end].to_vec(),
+                    page,
+                    page_size: size,
+                    total: fills.len(),
+                    pages: fills.len().div_ceil(size).max(1),
+                })
+                .unwrap(),
+            )
         }
         "/api/replay-fill-series" => {
             let target = match replay_target(report, &query) {
@@ -311,6 +389,10 @@ fn route(
                         "ask": sample.get("ask"),
                         "effective_bid": sample.get("effective_bid"),
                         "effective_ask": sample.get("effective_ask"),
+                        "bids": sample.get("bids"),
+                        "asks": sample.get("asks"),
+                        "effective_bids": sample.get("effective_bids"),
+                        "effective_asks": sample.get("effective_asks"),
                         "position": sample.get("position"),
                         "balance": sample.get("balance"),
                         "fee": sample.get("fee"),
@@ -338,20 +420,34 @@ fn route(
                 Some(curve) => curve.clone(),
                 None => return json_error(500, "replay has no curve array".into()),
             };
-            sort_values(&mut curve, &query, &[
-                ("ts", "ts"), ("bid", "bid"), ("ask", "ask"),
-                ("effective_bid", "effective_bid"), ("effective_ask", "effective_ask"),
-                ("my_bid", "my_bid"), ("my_ask", "my_ask"), ("position", "position"),
-                ("balance", "balance"), ("fee", "fee"), ("equity", "equity"),
-            ]);
+            sort_values(
+                &mut curve,
+                &query,
+                &[
+                    ("ts", "ts"),
+                    ("bid", "bid"),
+                    ("ask", "ask"),
+                    ("effective_bid", "effective_bid"),
+                    ("effective_ask", "effective_ask"),
+                    ("my_bid", "my_bid"),
+                    ("my_ask", "my_ask"),
+                    ("position", "position"),
+                    ("balance", "balance"),
+                    ("fee", "fee"),
+                    ("equity", "equity"),
+                ],
+            );
             let (page, size, start, end) = page_bounds(curve.len(), &query);
-            json_response(serde_json::to_value(Page {
-                items: curve[start..end].to_vec(),
-                page,
-                page_size: size,
-                total: curve.len(),
-                pages: curve.len().div_ceil(size).max(1),
-            }).unwrap())
+            json_response(
+                serde_json::to_value(Page {
+                    items: curve[start..end].to_vec(),
+                    page,
+                    page_size: size,
+                    total: curve.len(),
+                    pages: curve.len().div_ceil(size).max(1),
+                })
+                .unwrap(),
+            )
         }
         "/api/replay-run" => {
             if method != "POST" {
@@ -363,7 +459,10 @@ fn route(
             };
             {
                 let mut states = jobs.lock().unwrap();
-                if states.get(&target.key).is_some_and(|state| state == "running") {
+                if states
+                    .get(&target.key)
+                    .is_some_and(|state| state == "running")
+                {
                     return json_response(json!({"started": false, "running": true}));
                 }
                 states.insert(target.key.clone(), "running".into());
@@ -382,18 +481,27 @@ fn route(
                         .current_dir(workspace)
                         .args(["run", "--bin", "exec_replay", "--"])
                         .arg(&target.alpha_hash)
-                        .arg("--data-dir").arg(&data_root)
-                        .arg("--out").arg(&target.output_root)
-                        .arg("--session").arg(&target.selector)
+                        .arg("--data-dir")
+                        .arg(&data_root)
+                        .arg("--out")
+                        .arg(&target.output_root)
+                        .arg("--session")
+                        .arg(&target.selector)
                         .arg("--no-cache")
                         .output()
                 } else if sibling.as_ref().is_some_and(|path| path.is_file()) {
-                    eprintln!("[execviz replay] using sibling {}", sibling.as_ref().unwrap().display());
+                    eprintln!(
+                        "[execviz replay] using sibling {}",
+                        sibling.as_ref().unwrap().display()
+                    );
                     Command::new(sibling.unwrap())
                         .arg(&target.alpha_hash)
-                        .arg("--data-dir").arg(&data_root)
-                        .arg("--out").arg(&target.output_root)
-                        .arg("--session").arg(&target.selector)
+                        .arg("--data-dir")
+                        .arg(&data_root)
+                        .arg("--out")
+                        .arg(&target.output_root)
+                        .arg("--session")
+                        .arg(&target.selector)
                         .arg("--no-cache")
                         .output()
                 } else {
@@ -407,20 +515,24 @@ fn route(
                         let stdout = String::from_utf8_lossy(&output.stdout);
                         let stderr = String::from_utf8_lossy(&output.stderr);
                         if !stdout.trim().is_empty() {
-                            eprintln!("[execviz replay] stdout for {}:\n{}", target.identity, stdout.trim());
+                            eprintln!(
+                                "[execviz replay] stdout for {}:\n{}",
+                                target.identity,
+                                stdout.trim()
+                            );
                         }
                         if !stderr.trim().is_empty() {
-                            eprintln!("[execviz replay] stderr for {}:\n{}", target.identity, stderr.trim());
+                            eprintln!(
+                                "[execviz replay] stderr for {}:\n{}",
+                                target.identity,
+                                stderr.trim()
+                            );
                         }
                         if output.status.success() {
                             eprintln!("[execviz replay] complete: {}", target.identity);
                             "complete".into()
                         } else {
-                            let state = format!(
-                                "failed with {}: {}",
-                                output.status,
-                                stderr.trim()
-                            );
+                            let state = format!("failed with {}: {}", output.status, stderr.trim());
                             eprintln!("[execviz replay] {state} ({})", target.identity);
                             state
                         }
@@ -447,9 +559,10 @@ fn route(
                 .iter()
                 .flat_map(|strategy| &strategy.assets)
                 .flat_map(|asset| {
-                    asset.intervals.iter().map(|interval| {
-                        (&asset.timeframe, &asset.asset, &interval.session_id)
-                    })
+                    asset
+                        .intervals
+                        .iter()
+                        .map(|interval| (&asset.timeframe, &asset.asset, &interval.session_id))
                 })
                 .collect::<HashSet<_>>();
             json_response(json!({
@@ -461,62 +574,101 @@ fn route(
         }
         "/api/strategies" => {
             let (page, size, start, end) = page_bounds(report.strategies.len(), &query);
-            let mut items: Vec<_> = report.strategies
+            let mut items: Vec<_> = report
+                .strategies
                 .iter()
                 .enumerate()
-                .map(|(offset, strategy)| json!({
-                    "index": offset,
-                    "name": format!("{} / {}", strategy.alpha, strategy.hash),
-                    "alpha": strategy.alpha,
-                    "hash": strategy.hash,
-                    "source_path": strategy.source_path,
-                    "params": strategy.params,
-                    "stats": strategy.stats,
-                }))
+                .map(|(offset, strategy)| {
+                    json!({
+                        "index": offset,
+                        "name": format!("{} / {}", strategy.alpha, strategy.hash),
+                        "alpha": strategy.alpha,
+                        "hash": strategy.hash,
+                        "source_path": strategy.source_path,
+                        "params": strategy.params,
+                        "stats": strategy.stats,
+                    })
+                })
                 .collect();
-            sort_values(&mut items, &query, &[
-                ("strategy", "name"), ("mean_cost", "stats.mean_cost"),
-                ("p15_cost", "stats.p15_cost"), ("p50_cost", "stats.p50_cost"),
-                ("p90_cost", "stats.p90_cost"), ("completion", "stats.completion_pct"),
-                ("avg_mean_divergence", "stats.avg_mean_divergence"),
-                ("avg_max_divergence", "stats.avg_max_divergence"),
-                ("fees", "stats.fees"), ("status", "stats.status_pct"),
-            ]);
-            json_response(serde_json::to_value(Page {
-                items: items[start..end].to_vec(), page, page_size: size, total: report.strategies.len(),
-                pages: report.strategies.len().div_ceil(size).max(1),
-            }).unwrap())
+            sort_values(
+                &mut items,
+                &query,
+                &[
+                    ("strategy", "name"),
+                    ("mean_cost", "stats.mean_cost"),
+                    ("p15_cost", "stats.p15_cost"),
+                    ("p50_cost", "stats.p50_cost"),
+                    ("p90_cost", "stats.p90_cost"),
+                    ("completion", "stats.completion_pct"),
+                    ("avg_mean_divergence", "stats.avg_mean_divergence"),
+                    ("avg_max_divergence", "stats.avg_max_divergence"),
+                    ("fees", "stats.fees"),
+                    ("status", "stats.status_pct"),
+                ],
+            );
+            json_response(
+                serde_json::to_value(Page {
+                    items: items[start..end].to_vec(),
+                    page,
+                    page_size: size,
+                    total: report.strategies.len(),
+                    pages: report.strategies.len().div_ceil(size).max(1),
+                })
+                .unwrap(),
+            )
         }
         "/api/assets" => {
             let strategy_index = query.get("strategy").and_then(|v| v.parse().ok());
-            let Some(strategy) = strategy_index.and_then(|i: usize| report.strategies.get(i)) else {
-                return (400, "text/plain; charset=utf-8", b"invalid strategy".to_vec());
+            let Some(strategy) = strategy_index.and_then(|i: usize| report.strategies.get(i))
+            else {
+                return (
+                    400,
+                    "text/plain; charset=utf-8",
+                    b"invalid strategy".to_vec(),
+                );
             };
             let (page, size, start, end) = page_bounds(strategy.assets.len(), &query);
-            let mut items: Vec<_> = strategy.assets
+            let mut items: Vec<_> = strategy
+                .assets
                 .iter()
                 .enumerate()
-                .map(|(offset, asset)| json!({
-                    "index": offset,
-                    "timeframe": asset.timeframe,
-                    "asset": asset.asset,
-                    "ok": asset.ok,
-                    "stats": asset.stats,
-                }))
+                .map(|(offset, asset)| {
+                    json!({
+                        "index": offset,
+                        "timeframe": asset.timeframe,
+                        "asset": asset.asset,
+                        "ok": asset.ok,
+                        "stats": asset.stats,
+                    })
+                })
                 .collect();
-            sort_values(&mut items, &query, &[
-                ("asset", "asset"), ("runs", "stats.runs"),
-                ("mean_cost", "stats.mean_cost"), ("p15_cost", "stats.p15_cost"),
-                ("p50_cost", "stats.p50_cost"), ("p90_cost", "stats.p90_cost"),
-                ("avg_mean_divergence", "stats.avg_mean_divergence"),
-                ("avg_max_divergence", "stats.avg_max_divergence"),
-                ("completion", "stats.completion_pct"), ("fees", "stats.fees"),
-                ("status", "stats.status_pct"),
-            ]);
-            json_response(serde_json::to_value(Page {
-                items: items[start..end].to_vec(), page, page_size: size, total: strategy.assets.len(),
-                pages: strategy.assets.len().div_ceil(size).max(1),
-            }).unwrap())
+            sort_values(
+                &mut items,
+                &query,
+                &[
+                    ("asset", "asset"),
+                    ("runs", "stats.runs"),
+                    ("mean_cost", "stats.mean_cost"),
+                    ("p15_cost", "stats.p15_cost"),
+                    ("p50_cost", "stats.p50_cost"),
+                    ("p90_cost", "stats.p90_cost"),
+                    ("avg_mean_divergence", "stats.avg_mean_divergence"),
+                    ("avg_max_divergence", "stats.avg_max_divergence"),
+                    ("completion", "stats.completion_pct"),
+                    ("fees", "stats.fees"),
+                    ("status", "stats.status_pct"),
+                ],
+            );
+            json_response(
+                serde_json::to_value(Page {
+                    items: items[start..end].to_vec(),
+                    page,
+                    page_size: size,
+                    total: strategy.assets.len(),
+                    pages: strategy.assets.len().div_ceil(size).max(1),
+                })
+                .unwrap(),
+            )
         }
         "/api/intervals" => {
             let strategy_index = query.get("strategy").and_then(|v| v.parse().ok());
@@ -525,48 +677,80 @@ fn route(
                 .and_then(|i: usize| report.strategies.get(i))
                 .and_then(|strategy| asset_index.and_then(|i: usize| strategy.assets.get(i)))
             else {
-                return (400, "text/plain; charset=utf-8", b"invalid strategy or asset".to_vec());
+                return (
+                    400,
+                    "text/plain; charset=utf-8",
+                    b"invalid strategy or asset".to_vec(),
+                );
             };
             let (page, size, start, end) = page_bounds(asset.intervals.len(), &query);
-            let mut items = asset.intervals.iter()
+            let mut items = asset
+                .intervals
+                .iter()
                 .map(|interval| serde_json::to_value(interval).unwrap())
                 .collect::<Vec<_>>();
-            sort_values(&mut items, &query, &[
-                ("interval", "session_id"), ("start_position", "start_position"),
-                ("final_balance", "final_balance"), ("num_orders", "num_orders"),
-                ("num_trades", "num_trades"), ("n_maker", "n_maker"),
-                ("avg_filled_price", "avg_filled_price"),
-                ("percent_filled", "percent_filled"), ("cost", "cost"),
-                ("mean_divergence", "mean_divergence_score"),
-                ("max_divergence", "max_divergence_score"),
-                ("completion", "completion_pct"), ("fees", "fees"),
-                ("status", "status_ok"),
-            ]);
-            json_response(serde_json::to_value(Page {
-                items: items[start..end].to_vec(),
-                page, page_size: size, total: asset.intervals.len(),
-                pages: asset.intervals.len().div_ceil(size).max(1),
-            }).unwrap())
+            sort_values(
+                &mut items,
+                &query,
+                &[
+                    ("interval", "session_id"),
+                    ("start_position", "start_position"),
+                    ("final_balance", "final_balance"),
+                    ("num_orders", "num_orders"),
+                    ("num_trades", "num_trades"),
+                    ("n_maker", "n_maker"),
+                    ("avg_filled_price", "avg_filled_price"),
+                    ("percent_filled", "percent_filled"),
+                    ("cost", "cost"),
+                    ("mean_divergence", "mean_divergence_score"),
+                    ("max_divergence", "max_divergence_score"),
+                    ("completion", "completion_pct"),
+                    ("fees", "fees"),
+                    ("status", "status_ok"),
+                ],
+            );
+            json_response(
+                serde_json::to_value(Page {
+                    items: items[start..end].to_vec(),
+                    page,
+                    page_size: size,
+                    total: asset.intervals.len(),
+                    pages: asset.intervals.len().div_ceil(size).max(1),
+                })
+                .unwrap(),
+            )
         }
         "/api/asset-series" => {
             let strategy_index = query.get("strategy").and_then(|value| value.parse().ok());
             let asset_index = query.get("asset").and_then(|value| value.parse().ok());
             let Some(asset) = strategy_index
                 .and_then(|index: usize| report.strategies.get(index))
-                .and_then(|strategy| asset_index.and_then(|index: usize| strategy.assets.get(index)))
+                .and_then(|strategy| {
+                    asset_index.and_then(|index: usize| strategy.assets.get(index))
+                })
             else {
-                return (400, "text/plain; charset=utf-8", b"invalid strategy or asset".to_vec());
+                return (
+                    400,
+                    "text/plain; charset=utf-8",
+                    b"invalid strategy or asset".to_vec(),
+                );
             };
-            let points = asset.intervals.iter().filter_map(|interval| {
-                interval.session_start_ts.map(|timestamp| json!({
-                    "time_ms": timestamp / 1_000_000,
-                    "is_pct": interval.cost,
-                    "filled_cost_pct": interval.filled_cost_pct,
-                    "residual_cost_pct": interval.residual_cost_pct,
-                    "completion_pct": interval.completion_pct,
-                    "fees": interval.fees,
-                }))
-            }).collect::<Vec<_>>();
+            let points = asset
+                .intervals
+                .iter()
+                .filter_map(|interval| {
+                    interval.session_start_ts.map(|timestamp| {
+                        json!({
+                            "time_ms": timestamp / 1_000_000,
+                            "is_pct": interval.cost,
+                            "filled_cost_pct": interval.filled_cost_pct,
+                            "residual_cost_pct": interval.residual_cost_pct,
+                            "completion_pct": interval.completion_pct,
+                            "fees": interval.fees,
+                        })
+                    })
+                })
+                .collect::<Vec<_>>();
             json_response(json!({
                 "asset": format!("{}/{}", asset.timeframe, asset.asset.to_uppercase()),
                 "points": points,
@@ -574,8 +758,13 @@ fn route(
         }
         "/api/source" => {
             let strategy_index = query.get("strategy").and_then(|v| v.parse().ok());
-            let Some(strategy) = strategy_index.and_then(|i: usize| report.strategies.get(i)) else {
-                return (400, "text/plain; charset=utf-8", b"invalid strategy".to_vec());
+            let Some(strategy) = strategy_index.and_then(|i: usize| report.strategies.get(i))
+            else {
+                return (
+                    400,
+                    "text/plain; charset=utf-8",
+                    b"invalid strategy".to_vec(),
+                );
             };
             json_response(json!({
                 "name": format!("{} / {}", strategy.alpha, strategy.hash),
@@ -597,13 +786,17 @@ fn handle(
     jobs: Arc<ReplayJobs>,
 ) {
     let mut buffer = [0u8; 8192];
-    let Ok(read) = stream.read(&mut buffer) else { return };
+    let Ok(read) = stream.read(&mut buffer) else {
+        return;
+    };
     let request = String::from_utf8_lossy(&buffer[..read]);
     let Some(request_line) = request.lines().next() else {
         return;
     };
     let mut parts = request_line.split_whitespace();
-    let (Some(method), Some(target)) = (parts.next(), parts.next()) else { return };
+    let (Some(method), Some(target)) = (parts.next(), parts.next()) else {
+        return;
+    };
     let page_path = target.split('?').next().unwrap_or(target);
     if method == "GET" && matches!(page_path, "/" | "/asset-comparison" | "/session-replay") {
         match process::output_process(&outputs) {
@@ -635,7 +828,8 @@ pub fn serve(
     data_root: PathBuf,
     outputs: Vec<String>,
 ) -> Result<(), String> {
-    let listener = TcpListener::bind(bind).map_err(|error| format!("cannot bind {bind}: {error}"))?;
+    let listener =
+        TcpListener::bind(bind).map_err(|error| format!("cannot bind {bind}: {error}"))?;
     println!("execviz serving at http://{bind}");
     println!("press Ctrl+C to stop");
     let report = Arc::new(RwLock::new(report));

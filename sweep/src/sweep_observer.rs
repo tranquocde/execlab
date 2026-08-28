@@ -46,15 +46,24 @@ impl<B> SweepObserved<B> {
         }
     }
 
-    pub fn num_orders(&self) -> usize { self.num_orders }
-    pub fn n_maker(&self) -> usize { self.n_maker }
-    pub fn session_start_ts(&self) -> Option<i64> { self.session_start_ts }
-    pub fn arrival_mid_price(&self) -> Option<f64> { self.arrival_mid_price }
-    pub fn mean_divergence_score(&self) -> Option<f64> {
-        (self.divergence_count > 0)
-            .then_some(self.divergence_sum / self.divergence_count as f64)
+    pub fn num_orders(&self) -> usize {
+        self.num_orders
     }
-    pub fn max_divergence_score(&self) -> Option<f64> { self.max_divergence_score }
+    pub fn n_maker(&self) -> usize {
+        self.n_maker
+    }
+    pub fn session_start_ts(&self) -> Option<i64> {
+        self.session_start_ts
+    }
+    pub fn arrival_mid_price(&self) -> Option<f64> {
+        self.arrival_mid_price
+    }
+    pub fn mean_divergence_score(&self) -> Option<f64> {
+        (self.divergence_count > 0).then_some(self.divergence_sum / self.divergence_count as f64)
+    }
+    pub fn max_divergence_score(&self) -> Option<f64> {
+        self.max_divergence_score
+    }
 
     fn capture_arrival<MD>(&mut self)
     where
@@ -88,7 +97,9 @@ impl<B> SweepObserved<B> {
     {
         let depth = self.inner.depth(0);
         let (bid, ask) = (depth.best_bid(), depth.best_ask());
-        let Some(effective) = self.inner.effective_depth(0) else { return };
+        let Some(effective) = self.inner.effective_depth(0) else {
+            return;
+        };
         let (effective_bid, effective_ask) = (effective.best_bid(), effective.best_ask());
         let normal_spread = ask - bid;
         let effective_spread = effective_ask - effective_bid;
@@ -109,7 +120,8 @@ impl<B> SweepObserved<B> {
         self.divergence_sum += score;
         self.divergence_count += 1;
         self.max_divergence_score = Some(
-            self.max_divergence_score.map_or(score, |current| current.max(score)),
+            self.max_divergence_score
+                .map_or(score, |current| current.max(score)),
         );
     }
 }
@@ -121,12 +133,24 @@ where
 {
     type Error = B::Error;
 
-    fn current_timestamp(&self) -> i64 { self.inner.current_timestamp() }
-    fn num_assets(&self) -> usize { self.inner.num_assets() }
-    fn position(&self, asset_no: usize) -> f64 { self.inner.position(asset_no) }
-    fn state_values(&self, asset_no: usize) -> &StateValues { self.inner.state_values(asset_no) }
-    fn depth(&self, asset_no: usize) -> &MD { self.inner.depth(asset_no) }
-    fn last_trades(&self, asset_no: usize) -> &[Event] { self.inner.last_trades(asset_no) }
+    fn current_timestamp(&self) -> i64 {
+        self.inner.current_timestamp()
+    }
+    fn num_assets(&self) -> usize {
+        self.inner.num_assets()
+    }
+    fn position(&self, asset_no: usize) -> f64 {
+        self.inner.position(asset_no)
+    }
+    fn state_values(&self, asset_no: usize) -> &StateValues {
+        self.inner.state_values(asset_no)
+    }
+    fn depth(&self, asset_no: usize) -> &MD {
+        self.inner.depth(asset_no)
+    }
+    fn last_trades(&self, asset_no: usize) -> &[Event] {
+        self.inner.last_trades(asset_no)
+    }
     fn clear_last_trades(&mut self, asset_no: Option<usize>) {
         self.inner.clear_last_trades(asset_no)
     }
@@ -147,7 +171,13 @@ where
     ) -> Result<ElapseResult, Self::Error> {
         self.count_submission(order_type);
         self.inner.submit_buy_order(
-            asset_no, order_id, price, qty, time_in_force, order_type, wait,
+            asset_no,
+            order_id,
+            price,
+            qty,
+            time_in_force,
+            order_type,
+            wait,
         )
     }
 
@@ -164,7 +194,13 @@ where
     ) -> Result<ElapseResult, Self::Error> {
         self.count_submission(order_type);
         self.inner.submit_sell_order(
-            asset_no, order_id, price, qty, time_in_force, order_type, wait,
+            asset_no,
+            order_id,
+            price,
+            qty,
+            time_in_force,
+            order_type,
+            wait,
         )
     }
 

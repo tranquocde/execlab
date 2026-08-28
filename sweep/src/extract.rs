@@ -13,6 +13,8 @@ use execlab_core::SessionRow;
 use hftbacktest::prelude::{Bot, MarketDepth};
 use serde::Deserialize;
 
+use crate::engine::{BacktestConfig, TerminalValuation};
+
 #[derive(Deserialize)]
 struct SettlementSidecar {
     settle: f64,
@@ -42,7 +44,14 @@ fn sidecar_settlement(file: &Path) -> Result<Option<f64>, String> {
 ///
 /// Call AFTER `A::run` (which ends with `hbt.close()`), while the bot still
 /// holds its final depth and state.
-pub fn extract<MD, B>(file: &Path, data_root: &Path, hbt: &B) -> SessionRow
+pub fn extract<MD, B>(
+    file: &Path,
+    data_root: &Path,
+    hbt: &B,
+    config: &BacktestConfig,
+    start_position: f64,
+    arrival_mid_price: Option<f64>,
+) -> SessionRow
 where
     MD: MarketDepth,
     B: Bot<MD>,
@@ -60,29 +69,56 @@ where
         (false, true) => Some(ba),
         (false, false) => None,
     };
-    let book_settlement =
-        reference_price.map(|price| if price >= 0.5 { 1.0 } else { 0.0 });
-    let (settle, settlement_error) = match sidecar_settlement(file) {
-        Ok(Some(settle)) => (Some(settle), None),
-        Ok(None) => (book_settlement, None),
-        Err(error) => (None, Some(error)),
+    let book_settlement = reference_price.map(|price| if price >= 0.5 { 1.0 } else { 0.0 });
+    let (settle, settlement_error) = match config.terminal_valuation {
+        TerminalValuation::BinarySettlement => match sidecar_settlement(file) {
+            Ok(Some(settle)) => (Some(settle), None),
+            Ok(None) => (book_settlement, None),
+            Err(error) => (None, Some(error)),
+        },
+        TerminalValuation::FinalMidPrice => (reference_price, None),
     };
     let final_mid_price = reference_price.or(settle);
 
-    // Settle leftover inventory at the outcome rather than marking it at the
-    // last mid (CLAUDE.md), and deduct fees — the engine's own equity formula
-    // is `balance + position * price - fee` (assettype.rs:28).
-    let pnl = settle
-        .map(|price| sv.balance + sv.position * price - sv.fee)
-        .unwrap_or(f64::NAN);
-    let error = settlement_error.or_else(|| {
-        settle.is_none().then(|| {
-            format!(
-                "settlement unavailable: no {} and final best bid/ask are unavailable",
-                file.with_extension("settle.json").display()
-            )
+    // Value leftover inventory under the configured terminal mode and deduct
+    // fees. Mark-to-market PnL is the change from initial marked wealth;
+    // binary mode retains the legacy terminal-wealth convention.
+    let final_wealth = settle.map(|price| sv.balance + sv.position * price - sv.fee);
+    let pnl = match config.terminal_valuation {
+        TerminalValuation::BinarySettlement => final_wealth,
+        TerminalValuation::FinalMidPrice => {
+            final_wealth
+                .zip(arrival_mid_price)
+                .map(|(final_wealth, arrival)| {
+                    final_wealth - (config.initial_balance + start_position * arrival)
+                })
+        }
+    }
+    .unwrap_or(f64::NAN);
+    let error = settlement_error
+        .or_else(|| {
+            settle.is_none().then(|| {
+                format!(
+                    "terminal valuation unavailable: final best bid/ask are unavailable{}",
+                    if matches!(
+                        config.terminal_valuation,
+                        TerminalValuation::BinarySettlement
+                    ) {
+                        format!(
+                            " and no {} exists",
+                            file.with_extension("settle.json").display()
+                        )
+                    } else {
+                        String::new()
+                    }
+                )
+            })
         })
-    });
+        .or_else(|| {
+            (matches!(config.terminal_valuation, TerminalValuation::FinalMidPrice)
+                && arrival_mid_price.is_none())
+            .then(|| "mark-to-market PnL unavailable: arrival price is missing".into())
+        });
 
     SessionRow {
         session_id: file.file_stem().unwrap().to_string_lossy().into_owned(),
@@ -103,8 +139,8 @@ where
         pnl,
         balance: sv.balance,
         fee: sv.fee,
-        start_position: 0.0,
-        arrival_mid_price: None,
+        start_position,
+        arrival_mid_price,
         final_inventory: sv.position,
         settle,
         final_mid_price,

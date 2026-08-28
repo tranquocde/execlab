@@ -22,37 +22,57 @@ use std::{env, fs, path::Path, time::Instant};
 
 struct Args {
     data_dir: Option<String>,
-    out_dir: String,
+    out_dir: Option<String>,
     batch: usize,
     workers: Option<usize>,
     only: Vec<String>,
     force: bool,
     list: bool,
     status: bool,
+    params_file: Option<String>,
+    initial_position: Option<f64>,
+    progress_file: Option<String>,
 }
 
 fn parse_args() -> Args {
     let mut a = Args {
         data_dir: None,
-        out_dir: "output".into(),
+        out_dir: None,
         batch: 16,
         workers: None,
         only: Vec::new(),
         force: false,
         list: false,
         status: false,
+        params_file: None,
+        initial_position: None,
+        progress_file: None,
     };
 
     let mut it = env::args().skip(1);
     while let Some(arg) = it.next() {
         match arg.as_str() {
             "--data-dir" => a.data_dir = Some(it.next().expect("--data-dir needs a value")),
-            "--out" => a.out_dir = it.next().expect("--out needs a value"),
+            "--out" => a.out_dir = Some(it.next().expect("--out needs a value")),
             "--batch" => a.batch = it.next().unwrap().parse().expect("--batch needs a number"),
             "--max-workers" => a.workers = it.next().and_then(|v| v.parse().ok()),
             "--force" => a.force = true,
             "--list" => a.list = true,
             "--status" => a.status = true,
+            "--params-file" => {
+                a.params_file = Some(it.next().expect("--params-file needs a value"))
+            }
+            "--initial-position" => {
+                a.initial_position = Some(
+                    it.next()
+                        .expect("--initial-position needs a value")
+                        .parse()
+                        .expect("--initial-position needs a number"),
+                )
+            }
+            "--progress-file" => {
+                a.progress_file = Some(it.next().expect("--progress-file needs a value"))
+            }
             other => a.only.push(other.to_string()), // positional = alpha name
         }
     }
@@ -92,11 +112,14 @@ fn main() {
     // Read-only; runs before the data dir is even touched, so `--status` works
     // without a valid --data-dir and is safe to run mid-sweep.
     if args.status {
-        let out = Path::new(&args.out_dir);
         for e in registry
             .iter()
             .filter(|e| args.only.is_empty() || args.only.iter().any(|w| w == e.name))
         {
+            let config = engine::AlphaRunConfig::from_json(e.config_json)
+                .unwrap_or_else(|error| panic!("{}: {error}", e.name));
+            let out_dir = args.out_dir.as_deref().unwrap_or(&config.output_dir);
+            let out = Path::new(out_dir);
             status::report(out, e.name, e.code_hash, e.total_space);
         }
         println!();
@@ -110,55 +133,72 @@ fn main() {
             .unwrap();
     }
 
-    let data_dir = args.data_dir.as_deref().unwrap_or_else(|| {
-        eprintln!("--data-dir is required for a sweep (for example: --data-dir data/5m/<market>)");
-        std::process::exit(1);
-    });
-
-    let market_dirs = engine::market_dirs(data_dir).unwrap_or_else(|error| {
-        eprintln!("{error}");
-        std::process::exit(1);
-    });
-    let data_root = engine::data_root(&market_dirs).unwrap_or_else(|error| {
-        eprintln!("{error}");
-        std::process::exit(1);
-    });
-    let out = Path::new(&args.out_dir);
-    fs::create_dir_all(out).unwrap();
-
     let selected: Vec<&Entry> = registry
         .iter()
         .filter(|e| args.only.is_empty() || args.only.iter().any(|w| w == e.name))
         .collect();
 
-    eprintln!(
-        "{} alpha(s) | {} market(s) from {} | batch {}",
-        selected.len(),
-        market_dirs.len(),
-        data_dir,
-        args.batch
-    );
+    if args.params_file.is_some() && selected.len() != 1 {
+        eprintln!("--params-file requires exactly one alpha name");
+        std::process::exit(1);
+    }
+    let override_params = args.params_file.as_deref().map(|path| {
+        let text = fs::read_to_string(path).unwrap_or_else(|error| {
+            eprintln!("cannot read parameter override {path}: {error}");
+            std::process::exit(1);
+        });
+        serde_json::from_str::<serde_json::Value>(&text).unwrap_or_else(|error| {
+            eprintln!("cannot parse parameter override {path}: {error}");
+            std::process::exit(1);
+        })
+    });
 
-    for market_dir in market_dirs {
-        let market_dir = market_dir.to_string_lossy();
-        let files = engine::npz_files(&market_dir);
+    for e in &selected {
+        let mut config = engine::AlphaRunConfig::from_json(e.config_json)
+            .unwrap_or_else(|error| panic!("{}: {error}", e.name));
+        if let Some(position) = args.initial_position {
+            config.backtest_config.initial_position = position;
+        }
+        let data_dir = args.data_dir.as_deref().unwrap_or(&config.data_dir);
+        let out_dir = args.out_dir.as_deref().unwrap_or(&config.output_dir);
+        let market_dirs = engine::market_dirs(data_dir).unwrap_or_else(|error| {
+            eprintln!("{}: {error}", e.name);
+            std::process::exit(1);
+        });
+        let data_root = engine::data_root(&market_dirs).unwrap_or_else(|error| {
+            eprintln!("{}: {error}", e.name);
+            std::process::exit(1);
+        });
+        let out = Path::new(out_dir);
+        fs::create_dir_all(out).unwrap();
         eprintln!(
-            "--- market {} | {} sessions ---",
-            market_dir,
-            files.len()
+            "{} | {} market(s) from {} | batch {}",
+            e.name,
+            market_dirs.len(),
+            data_dir,
+            args.batch
         );
 
-        for e in &selected {
+        for market_dir in market_dirs {
+            let market_dir = market_dir.to_string_lossy();
+            let files = engine::npz_files(&market_dir);
+            eprintln!("--- market {} | {} sessions ---", market_dir, files.len());
             eprintln!("=== {} (code {}) ===", e.name, e.code_hash);
             let t = Instant::now();
-            (e.sweep)(
+            if let Err(error) = (e.sweep)(
                 &files,
                 &market_dir,
                 &data_root,
                 out,
                 args.batch,
                 args.force,
-            );
+                &config.backtest_config,
+                override_params.as_ref(),
+                args.progress_file.as_deref().map(Path::new),
+            ) {
+                eprintln!("{}: {error}", e.name);
+                std::process::exit(1);
+            }
             eprintln!(
                 "=== {} done in {:.1}s ===",
                 e.name,

@@ -18,8 +18,8 @@ use std::{
     time::Instant,
 };
 
-use rayon::prelude::*;
 use hftbacktest::prelude::Bot;
+use rayon::prelude::*;
 
 use execlab_core::{
     output::{self, DataRef},
@@ -28,10 +28,10 @@ use execlab_core::{
 
 use crate::{
     alpha::Alpha,
-    engine::{backtest_config, build_backtest, hash_file_list, load_session},
+    engine::{build_backtest, hash_file_list, load_session, BacktestConfig},
     extract::extract,
     population::Population,
-    progress::Progress,
+    progress::{MachineProgress, Progress},
     sweep_observer::SweepObserved,
     template,
 };
@@ -45,6 +45,8 @@ pub fn sweep<A, Pop>(
     out: &Path,
     mut population: Pop,
     force: bool,
+    config: &BacktestConfig,
+    progress_path: Option<&Path>,
 ) where
     A: Alpha,
     Pop: Population<A::Params>,
@@ -61,6 +63,10 @@ pub fn sweep<A, Pop>(
     let (mut ran, mut skipped) = (0usize, 0usize);
 
     let total_combos = population.total_hint();
+    let machine_progress = MachineProgress::new(
+        progress_path,
+        total_combos.map_or(0, |combinations| combinations * files.len()),
+    );
     let mut batch_no = 0usize;
 
     // ---- outer: batches (later: GA generations) ----
@@ -73,10 +79,13 @@ pub fn sweep<A, Pop>(
         let todo: Vec<A::Params> = batch
             .into_iter()
             .filter(|p| {
-                let dir = out.join(name).join(output::param_hash(code_hash, p));
+                let dir = out
+                    .join(name)
+                    .join(output::param_hash(code_hash, p, config));
                 let done = !force && output::is_complete(&dir, data_dir, &files_hash);
                 if done {
                     skipped += 1;
+                    machine_progress.skip(files.len());
                 } else {
                     ran += 1;
                 }
@@ -109,13 +118,21 @@ pub fn sweep<A, Pop>(
 
             // ---- inner: this batch's params, on resident data ----
             for p in &todo {
+                machine_progress.begin();
                 // `data.clone()` = Rc refcount bump, not a copy of the events.
-                let mut hbt = SweepObserved::new(build_backtest(data.clone()));
+                let mut hbt = SweepObserved::new(build_backtest(data.clone(), config));
                 let start_position = hbt.position(0);
 
                 A::run(&mut hbt, p);
 
-                let mut row = extract(file, data_root, &hbt);
+                let mut row = extract(
+                    file,
+                    data_root,
+                    &hbt,
+                    config,
+                    start_position,
+                    hbt.arrival_mid_price(),
+                );
                 row.session_start_ts = hbt.session_start_ts();
                 row.start_position = start_position;
                 row.arrival_mid_price = hbt.arrival_mid_price();
@@ -124,14 +141,16 @@ pub fn sweep<A, Pop>(
                 row.mean_divergence_score = hbt.mean_divergence_score();
                 row.max_divergence_score = hbt.max_divergence_score();
                 row.compute_execution_costs();
+                let failed = row.error.is_some();
 
                 rows.lock()
                     .unwrap()
-                    .entry(output::param_hash(code_hash, p))
+                    .entry(output::param_hash(code_hash, p, config))
                     .or_default()
                     .push(row);
 
                 progress.inc();
+                machine_progress.finish(failed);
             }
             // `data` dropped here -> memory freed before the next file
         });
@@ -145,7 +164,7 @@ pub fn sweep<A, Pop>(
         let runtime = t0.elapsed().as_secs_f64() / todo.len().max(1) as f64;
 
         for p in &todo {
-            let h = output::param_hash(code_hash, p);
+            let h = output::param_hash(code_hash, p, config);
             let dir = out.join(name).join(&h);
 
             // Force is scoped to the current market. A parent data directory
@@ -171,7 +190,7 @@ pub fn sweep<A, Pop>(
                 name,
                 code_hash,
                 p,
-                backtest_config(),
+                serde_json::to_value(config).unwrap(),
                 &r,
                 data_dir,
                 data,
@@ -206,6 +225,8 @@ pub fn sweep<A, Pop>(
             );
         }
     }
+
+    machine_progress.complete();
 
     eprintln!("{name}: {ran} run, {skipped} skipped (already complete)");
 }

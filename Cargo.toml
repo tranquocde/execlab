@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["core", "sweep", "viz"]
+members = ["core", "sweep", "viz", "trader_viz"]
 #
 # Dependency direction is enforced by Cargo:
 #     sweep   -> core

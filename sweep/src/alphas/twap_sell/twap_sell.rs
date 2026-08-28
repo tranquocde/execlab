@@ -1,4 +1,4 @@
-//! One alpha = one file: params, search space, and logic. Nothing else in the
+//! One alpha folder: this file owns params, search space, and trading logic.
 //! crate changes when you add another.
 
 use hftbacktest::prelude::*;
@@ -21,16 +21,18 @@ impl Alpha for A {
 
     // ---- the search space, owned by the alpha ----
     fn search_space() -> Vec<Params> {
-        let mut v = Vec::new();
-        for elapse_ns in (1..=4).map(|i| i * 10_000_000i64) {
-            for slice_qty in [2.0, 10.0, 20.0] {
-                v.push(Params {
-                    elapse_ns,
-                    slice_qty,
-                });
-            }
-        }
-        v // 20 combinations
+        [
+            (1, 100.0),
+            (20, 500.0),
+            (300, 1_000.0),
+            (400 , 2_000.0)
+        ]
+        .into_iter()
+        .map(|(elapse_units, slice_qty)| Params {
+            elapse_ns: elapse_units * 100_000_000i64,
+            slice_qty,
+        })
+        .collect() // 3 paired combinations
     }
 
     // ---- the trading logic ----
@@ -46,25 +48,31 @@ impl Alpha for A {
         while hbt.elapse(p.elapse_ns).unwrap() == ElapseResult::Ok {
             let depth = hbt.depth(0);
             let (bb, ba) = (depth.best_bid(), depth.best_ask());
-            if !(bb > 0.0 && ba > 0.0) {
+            if !(bb > 0.0 && ba > bb) {
                 continue;
             }
             let pos = hbt.position(0);
-            if pos <= 0.0 {
-                break;
+            if pos.abs() <= f64::EPSILON {
+                continue;
             }
 
             hbt.clear_inactive_orders(Some(0));
             order_id += 1;
-            let _ = hbt.submit_sell_order(
-                0,
-                order_id,
-                (bb + ba) / 2.0,
-                p.slice_qty,
-                TimeInForce::GTC,
-                OrdType::Market,
-                true,
-            );
+            //if order_id % 10 !=0 {continue;}
+            let qty = p.slice_qty.min(pos.abs());
+            if pos < 0.0 {
+                let _ = hbt.submit_buy_order(
+                    0, order_id, (bb + ba) / 2.0, qty,
+                    TimeInForce::GTC, OrdType::Market, true,
+                );
+            } else {
+                let _ = hbt.submit_sell_order(
+                    0, order_id, (bb + ba) / 2.0, qty,
+                    TimeInForce::GTC, OrdType::Market, true,
+                );
+            }
+
+
         }
 
         hbt.close().unwrap();

@@ -61,6 +61,9 @@ pub fn replay<A: Alpha>(args: Args) -> Result<ReplayResult, String> {
     // bound on Alpha::Params is for.
     let params: A::Params = serde_json::from_value(manifest.params.clone())
         .map_err(|e| format!("cannot rebuild params from manifest: {e}"))?;
+    let backtest_config: engine::BacktestConfig =
+        serde_json::from_value(manifest.backtest_config.clone())
+            .map_err(|e| format!("cannot rebuild backtest config from manifest: {e}"))?;
 
     let (market, row) = find_session(&dir, args.session)?;
 
@@ -89,7 +92,7 @@ pub fn replay<A: Alpha>(args: Args) -> Result<ReplayResult, String> {
     }
 
     let data = engine::load_session(&src);
-    let backtest = engine::build_backtest(data);
+    let backtest = engine::build_backtest(data, &backtest_config);
     let initial_position = backtest.position(0);
     let mut hbt = Observed::new(backtest);
 
@@ -98,7 +101,14 @@ pub fn replay<A: Alpha>(args: Args) -> Result<ReplayResult, String> {
     // Recompute exactly as the sweep does, then check it against tier A.
     // Only numeric fields are compared below; the replay row's source path is
     // not persisted, so use its immediate parent as a harmless local root.
-    let replayed = extract(&src, src.parent().unwrap_or(args.data_root), &hbt);
+    let replayed = extract(
+        &src,
+        src.parent().unwrap_or(args.data_root),
+        &hbt,
+        &backtest_config,
+        initial_position,
+        hbt.arrival_mid_price,
+    );
     let diff = (replayed.pnl - row.pnl).abs();
 
     // Fill-level self-check: the fills we recorded must account for the whole
@@ -154,11 +164,8 @@ pub fn replay<A: Alpha>(args: Args) -> Result<ReplayResult, String> {
         ));
     }
     println!(
-      "tier-A pnl {}, replay pnl {}, abs_diff {}, final_pos {}",
-      verify.tier_a_pnl,
-      verify.replay_pnl,
-      verify.abs_diff,
-      verify.final_position,
+        "tier-A pnl {}, replay pnl {}, abs_diff {}, final_pos {}",
+        verify.tier_a_pnl, verify.replay_pnl, verify.abs_diff, verify.final_position,
     );
 
     if !verify.matches {
@@ -202,7 +209,12 @@ fn find_session(dir: &Path, selector: &str) -> Result<(String, SessionRow), Stri
     let row = rows
         .into_iter()
         .find(|row| row.session_id == session_id)
-        .ok_or_else(|| format!("session `{session_id}` not found in {}", rows_path.display()))?;
+        .ok_or_else(|| {
+            format!(
+                "session `{session_id}` not found in {}",
+                rows_path.display()
+            )
+        })?;
 
     Ok((format!("{timeframe}/{market}"), row))
 }

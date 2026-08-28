@@ -4,10 +4,31 @@
 # Sweep results — regenerable from (code_hash, params, data) by design.
 # The whole point of the deterministic pipeline is that these need not be
 # versioned: re-running reproduces them.
-/output/
+/*output/
 
 # Session data (npz). Large, and lives upstream in polyhbt/, not here.
-/data/
+/*data/
+
+# Develop-mode run snapshots and logs
+/.execlab/runs/
+/trader_viz/.env
+/trader_viz/state/
+
+# Local configuration and credentials. Commit *.env.example templates only.
+**/.env
+!**/.env.example
+
+# Local ngrok policy contains Basic Auth credentials
+/ngrok-traffic-policy.yml
+
+# Local analysis, raw exports, caches, and design notes.
+__pycache__/
+*.py[cod]
+*.parquet
+*.ipynb
+/mockup_trader_ui/
+/note.txt
+*.log
 
 # Atomic-write leftovers from a killed run
 *.tmp

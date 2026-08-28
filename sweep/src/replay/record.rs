@@ -5,6 +5,13 @@
 
 use serde::{Deserialize, Serialize};
 
+/// One order-book level, serialized as `{ "px": ..., "qty": ... }`.
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct BookLevel {
+    pub px: f64,
+    pub qty: f64,
+}
+
 /// One execution. Every fill is kept; the curve is what gets thinned.
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct Fill {
@@ -38,6 +45,16 @@ pub struct Sample {
     /// or that side has no liquidity.
     pub effective_bid: Option<f64>,
     pub effective_ask: Option<f64>,
+    /// Top three visible levels at this sample. Bids are best-to-worst
+    /// (descending price); asks are best-to-worst (ascending price).
+    #[serde(default)]
+    pub bids: Vec<BookLevel>,
+    #[serde(default)]
+    pub asks: Vec<BookLevel>,
+    #[serde(default)]
+    pub effective_bids: Vec<BookLevel>,
+    #[serde(default)]
+    pub effective_asks: Vec<BookLevel>,
     /// Where OUR resting orders sat. This is what turns a price chart into an
     /// explanation: you watch your quote get lifted and the book walk away.
     pub my_bid: Option<f64>,

@@ -124,8 +124,8 @@ fn resolve_input(path: &Path) -> Result<Vec<PathBuf>, String> {
 fn resolve_outputs(inputs: &[String]) -> Result<Vec<PathBuf>, String> {
     let mut strategies = BTreeSet::new();
     for input in inputs {
-        let canonical = fs::canonicalize(input)
-            .map_err(|error| format!("cannot resolve {input}: {error}"))?;
+        let canonical =
+            fs::canonicalize(input).map_err(|error| format!("cannot resolve {input}: {error}"))?;
         for strategy in resolve_input(&canonical)? {
             strategies.insert(
                 fs::canonicalize(&strategy)
@@ -141,10 +141,10 @@ fn interval_cost(row: &SessionRow) -> Option<f64> {
 }
 
 fn interval_view(row: SessionRow) -> IntervalView {
-    let avg_filled_price = (row.trading_volume > 0.0)
-        .then_some(row.trading_value / row.trading_volume);
-    let percent_filled = (row.num_orders > 0)
-        .then_some(row.num_trades as f64 / row.num_orders as f64 * 100.0);
+    let avg_filled_price =
+        (row.trading_volume > 0.0).then_some(row.trading_value / row.trading_volume);
+    let percent_filled =
+        (row.num_orders > 0).then_some(row.num_trades as f64 / row.num_orders as f64 * 100.0);
     let completion_pct = (row.start_position.is_finite()
         && row.start_position.abs() > f64::EPSILON
         && row.final_inventory.is_finite())
@@ -195,9 +195,13 @@ fn aggregate(intervals: &[&IntervalView]) -> AggregateStats {
         .filter_map(|row| row.completion_pct)
         .collect();
     let mean_divergences: Vec<f64> = intervals
-        .iter().filter_map(|row| row.mean_divergence_score).collect();
+        .iter()
+        .filter_map(|row| row.mean_divergence_score)
+        .collect();
     let max_divergences: Vec<f64> = intervals
-        .iter().filter_map(|row| row.max_divergence_score).collect();
+        .iter()
+        .filter_map(|row| row.max_divergence_score)
+        .collect();
     let ok = intervals.iter().filter(|row| row.status_ok).count();
     AggregateStats {
         runs: intervals.len(),
@@ -233,7 +237,10 @@ fn load_strategy(path: &Path) -> Result<StrategyView, String> {
 
     let mut assets = Vec::new();
     for timeframe_dir in child_dirs(path)? {
-        if timeframe_dir.file_name().is_some_and(|name| name == "replay") {
+        if timeframe_dir
+            .file_name()
+            .is_some_and(|name| name == "replay")
+        {
             continue;
         }
         let timeframe = timeframe_dir
@@ -244,7 +251,10 @@ fn load_strategy(path: &Path) -> Result<StrategyView, String> {
         let mut files: Vec<PathBuf> = fs::read_dir(&timeframe_dir)
             .map_err(|error| format!("cannot read {}: {error}", timeframe_dir.display()))?
             .filter_map(|entry| entry.ok().map(|entry| entry.path()))
-            .filter(|file| file.extension().is_some_and(|extension| extension == "json"))
+            .filter(|file| {
+                file.extension()
+                    .is_some_and(|extension| extension == "json")
+            })
             .collect();
         files.sort();
 
@@ -276,10 +286,14 @@ fn load_strategy(path: &Path) -> Result<StrategyView, String> {
         .collect();
 
     let mut strategy_stats = aggregate(&all_intervals);
-    let asset_mean_divergences: Vec<f64> = assets.iter()
-        .filter_map(|asset| asset.stats.avg_mean_divergence).collect();
-    let asset_max_divergences: Vec<f64> = assets.iter()
-        .filter_map(|asset| asset.stats.avg_max_divergence).collect();
+    let asset_mean_divergences: Vec<f64> = assets
+        .iter()
+        .filter_map(|asset| asset.stats.avg_mean_divergence)
+        .collect();
+    let asset_max_divergences: Vec<f64> = assets
+        .iter()
+        .filter_map(|asset| asset.stats.avg_max_divergence)
+        .collect();
     strategy_stats.avg_mean_divergence = (!asset_mean_divergences.is_empty())
         .then(|| asset_mean_divergences.iter().sum::<f64>() / asset_mean_divergences.len() as f64);
     strategy_stats.avg_max_divergence = (!asset_max_divergences.is_empty())
@@ -314,8 +328,11 @@ pub fn output_process(inputs: &[String]) -> Result<Report, String> {
         }
     }
     strategies.sort_by(|left, right| {
-        (&left.alpha, &left.hash, &left.source_path)
-            .cmp(&(&right.alpha, &right.hash, &right.source_path))
+        (&left.alpha, &left.hash, &left.source_path).cmp(&(
+            &right.alpha,
+            &right.hash,
+            &right.source_path,
+        ))
     });
     if strategies.is_empty() {
         return Err(format!(
@@ -326,7 +343,10 @@ pub fn output_process(inputs: &[String]) -> Result<Report, String> {
                 .unwrap_or_default()
         ));
     }
-    Ok(Report { strategies, warnings })
+    Ok(Report {
+        strategies,
+        warnings,
+    })
 }
 
 #[cfg(test)]

@@ -30,7 +30,7 @@ pub struct SessionRow {
     pub session_start_ts: Option<i64>,
 
     // ---- ledger ----
-    /// Total PnL including settlement of leftover inventory at the 0/1 outcome.
+    /// Total PnL under the configured terminal-valuation mode.
     pub pnl: f64,
     /// Cash at session end, before settling inventory.
     pub balance: f64,
@@ -42,16 +42,17 @@ pub struct SessionRow {
     /// First valid book reference price observed after market data starts.
     #[serde(default)]
     pub arrival_mid_price: Option<f64>,
-    /// Leftover inventory, settled at `settle`.
+    /// Leftover inventory at the end of the session.
     pub final_inventory: f64,
-    /// The inferred 0/1 outcome. `None` when neither final book side is
-    /// available, in which case the session is marked as failed.
+    /// Terminal valuation price: binary outcome for prediction markets, or
+    /// final reference price for mark-to-market assets.
     pub settle: Option<f64>,
     /// Final book reference price (mid when two-sided, otherwise the available
     /// side), falling back to the settlement value when the final book is empty.
     #[serde(default)]
     pub final_mid_price: Option<f64>,
-    /// Sell-side implementation-shortfall components in quote currency.
+    /// Direction-aware implementation-shortfall components in quote currency.
+    /// Positive is adverse and negative means execution beat arrival.
     #[serde(default)]
     pub filled_cost: Option<f64>,
     #[serde(default)]
@@ -127,10 +128,16 @@ impl SessionRow {
     pub fn compute_execution_costs(&mut self) {
         let arrival = self.arrival_mid_price.filter(|price| price.is_finite());
         let final_mid = self.final_mid_price.filter(|price| price.is_finite());
+        let direction = (self.start_position.is_finite()
+            && self.start_position.abs() > f64::EPSILON)
+            .then(|| self.start_position.signum());
 
         self.filled_cost = arrival
+            .zip(direction)
             .filter(|_| self.trading_volume.is_finite() && self.trading_value.is_finite())
-            .map(|price| self.trading_volume * price - self.trading_value);
+            .map(|(price, direction)| {
+                direction * (self.trading_volume * price - self.trading_value)
+            });
         self.residual_cost = arrival
             .zip(final_mid)
             .filter(|_| self.final_inventory.is_finite())
@@ -140,7 +147,7 @@ impl SessionRow {
                 self.start_position.is_finite()
                     && (self.start_position * arrival).abs() > f64::EPSILON
             })
-            .map(|arrival| self.start_position * arrival);
+            .map(|arrival| (self.start_position * arrival).abs());
         self.filled_cost_pct = self
             .filled_cost
             .zip(initial_notional)
@@ -158,6 +165,64 @@ impl SessionRow {
             .implementation_shortfall
             .zip(initial_notional)
             .map(|(shortfall, notional)| shortfall / notional * 100.0);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn costs(
+        start_position: f64,
+        final_inventory: f64,
+        arrival: f64,
+        final_mid: f64,
+        trading_volume: f64,
+        average_fill: f64,
+        fee: f64,
+    ) -> SessionRow {
+        let mut row = SessionRow::failed(Path::new("session.npz"), String::new());
+        row.start_position = start_position;
+        row.final_inventory = final_inventory;
+        row.arrival_mid_price = Some(arrival);
+        row.final_mid_price = Some(final_mid);
+        row.trading_volume = trading_volume;
+        row.trading_value = trading_volume * average_fill;
+        row.fee = fee;
+        row.compute_execution_costs();
+        row
+    }
+
+    #[test]
+    fn sell_beating_arrival_is_negative() {
+        let row = costs(1_000.0, 0.0, 100.0, 100.0, 1_000.0, 101.0, 0.0);
+        assert_eq!(row.filled_cost, Some(-1_000.0));
+        assert_eq!(row.implementation_shortfall, Some(-1_000.0));
+        assert_eq!(row.implementation_shortfall_pct, Some(-1.0));
+    }
+
+    #[test]
+    fn buy_beating_arrival_is_negative() {
+        let row = costs(-1_000.0, 0.0, 100.0, 100.0, 1_000.0, 99.0, 0.0);
+        assert_eq!(row.filled_cost, Some(-1_000.0));
+        assert_eq!(row.implementation_shortfall, Some(-1_000.0));
+        assert_eq!(row.implementation_shortfall_pct, Some(-1.0));
+    }
+
+    #[test]
+    fn unfinished_buy_before_price_rise_is_positive() {
+        let row = costs(-1_000.0, -400.0, 100.0, 110.0, 600.0, 100.0, 0.0);
+        assert_eq!(row.filled_cost, Some(0.0));
+        assert_eq!(row.residual_cost, Some(4_000.0));
+        assert_eq!(row.implementation_shortfall, Some(4_000.0));
+        assert_eq!(row.implementation_shortfall_pct, Some(4.0));
+    }
+
+    #[test]
+    fn unfinished_sell_before_price_fall_is_positive() {
+        let row = costs(1_000.0, 400.0, 100.0, 90.0, 600.0, 100.0, 0.0);
+        assert_eq!(row.residual_cost, Some(4_000.0));
+        assert_eq!(row.implementation_shortfall_pct, Some(4.0));
     }
 }
 
