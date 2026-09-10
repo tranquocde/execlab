@@ -22,7 +22,7 @@ impl Alpha for A {
     // ---- the search space, owned by the alpha ----
     fn search_space() -> Vec<Params> {
         [
-            (1, 100.0),
+            (10, 100.0),
             (20, 500.0),
             (300, 1_000.0),
             (400 , 2_000.0)

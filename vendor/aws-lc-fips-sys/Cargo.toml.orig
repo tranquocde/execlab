@@ -1,0 +1,85 @@
+[package]
+name = "aws-lc-fips-sys"
+description = "AWS-LC is a general-purpose cryptographic library maintained by the AWS Cryptography team for AWS and their customers. This is the FIPS validated version of AWS-LC."
+version = "0.13.16"
+links = "aws_lc_fips_0_13_16"
+authors = ["AWS-LC"]
+edition = "2021"
+repository = "https://github.com/aws/aws-lc-rs"
+license = "ISC AND (Apache-2.0 OR ISC) AND OpenSSL"
+rust-version = "1.71.0"
+include = [
+    "LICENSE",
+    "/aws-lc/**/*.c",
+    "/aws-lc/**/*.cc",
+    "/aws-lc/**/*.pl",
+    "/aws-lc/**/*.h",
+    "/aws-lc/**/*.S",
+    "/aws-lc/**/*.asm",
+    "/aws-lc/**/CMakeLists.txt",
+    "/aws-lc/**/*.cmake",
+    "/aws-lc/**/*.errordata",
+    "/aws-lc/**/*.go",
+    "/aws-lc/go.mod",
+    "/aws-lc/go.sum",
+    "/aws-lc/**/*.lds",
+    "!/aws-lc/bindings/**",
+    "!/aws-lc/docs/**",
+    "!/aws-lc/fuzz/**",
+    "!/aws-lc/generated-src/crypto_test_data.cc",
+    "!/aws-lc/tests/**",
+    "!/aws-lc/third_party/**",
+    "!/aws-lc/util/**",
+    "!/aws-lc/tool/**",
+    "!/aws-lc/tool-openssl/**",
+    "/aws-lc/tests/compiler_features_tests/**.c",
+    "/aws-lc/third_party/fiat/**/LICENSE",
+    "/aws-lc/third_party/fiat/**/*.h",
+    "/aws-lc/third_party/s2n-bignum/**/*.S",
+    "/aws-lc/third_party/s2n-bignum/**/*.h",
+    "/aws-lc/third_party/jitterentropy/**/*.c",
+    "/aws-lc/third_party/jitterentropy/**/*.h",
+    "/aws-lc/util/fipstools/**/CMakeLists.txt",
+    "/aws-lc/util/fipstools/**/*.c",
+    "/aws-lc/util/fipstools/**/*.cc",
+    "/aws-lc/util/fipstools/**/*.go",
+    "/aws-lc/util/ar/**/*.go",
+    "/aws-lc/util/godeps.go",
+    "/CMakeLists.txt",
+    "/builder/**/*.rs",
+    "/builder/**/*.c",
+    "/builder/printenv.bat",
+    "/Cargo.toml",
+    "/generated-include/**",
+    "/include/**",
+    "/rust_wrapper.c",
+    "/src/**/*.rs",
+    "/tests/**/*.rs",
+]
+build = "builder/main.rs"
+
+[features]
+asan = []
+ssl = []
+bindgen = []
+fips = []
+default = ["fips"]
+
+[build-dependencies]
+cmake.workspace = true
+dunce.workspace = true
+fs_extra.workspace = true
+cc.workspace = true
+regex.workspace = true
+bindgen.workspace = true
+
+[target.'cfg(unix)'.build-dependencies]
+# Used only for auto-detecting a system-installed AWS-LC on Unix; not available
+# (and not used) on Windows/MSVC.
+pkg-config = { workspace = true }
+
+[dev-dependencies]
+regex.workspace = true
+
+[package.metadata.aws-lc-fips-sys]
+commit-hash = "85ebe82b744c7941433962fde312aa062c15d6d2"
