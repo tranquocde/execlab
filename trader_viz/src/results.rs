@@ -25,9 +25,12 @@ pub struct StrategyResult {
 pub struct Stats {
     pub runs: usize,
     pub mean_is_pct: Option<f64>,
+    pub p15_is_pct: Option<f64>,
+    pub p50_is_pct: Option<f64>,
     pub p90_is_pct: Option<f64>,
     pub completion_pct: Option<f64>,
     pub fees: f64,
+    pub avg_trades: Option<f64>,
     pub avg_mean_divergence: Option<f64>,
     pub avg_max_divergence: Option<f64>,
     pub status_pct: f64,
@@ -55,6 +58,28 @@ pub struct IntervalResult {
     pub error: Option<String>,
     pub timeframe: String,
     pub symbol: String,
+}
+
+pub fn best_strategy(report: &Performance) -> Option<&StrategyResult> {
+    report.strategies.iter().min_by(|a, b| {
+        b.stats
+            .completion_pct
+            .unwrap_or(f64::NEG_INFINITY)
+            .total_cmp(&a.stats.completion_pct.unwrap_or(f64::NEG_INFINITY))
+            .then_with(|| {
+                a.stats
+                    .mean_is_pct
+                    .unwrap_or(f64::INFINITY)
+                    .total_cmp(&b.stats.mean_is_pct.unwrap_or(f64::INFINITY))
+            })
+            .then_with(|| {
+                a.stats
+                    .avg_mean_divergence
+                    .unwrap_or(f64::INFINITY)
+                    .total_cmp(&b.stats.avg_mean_divergence.unwrap_or(f64::INFINITY))
+            })
+            .then_with(|| a.hash.cmp(&b.hash))
+    })
 }
 
 fn child_dirs(path: &Path) -> Vec<PathBuf> {
@@ -131,13 +156,17 @@ fn stats(intervals: &[IntervalResult]) -> Stats {
         .iter()
         .filter_map(|i| i.max_divergence_score)
         .collect();
+    let trades: Vec<_> = intervals.iter().map(|i| i.num_trades as f64).collect();
     let avg = |v: &[f64]| (!v.is_empty()).then(|| v.iter().sum::<f64>() / v.len() as f64);
     Stats {
         runs: intervals.len(),
         mean_is_pct: avg(&costs),
+        p15_is_pct: percentile(&costs, 0.15),
+        p50_is_pct: percentile(&costs, 0.5),
         p90_is_pct: percentile(&costs, 0.9),
         completion_pct: avg(&completions),
         fees: intervals.iter().map(|i| i.fee).sum(),
+        avg_trades: avg(&trades),
         avg_mean_divergence: avg(&means),
         avg_max_divergence: avg(&maxes),
         status_pct: if intervals.is_empty() {

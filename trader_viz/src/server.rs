@@ -262,7 +262,41 @@ fn route(app: &Arc<App>, method: &str, target: &str, body: &[u8]) -> Response {
         };
     }
     if method == "GET" && path == "/api/scenarios" {
-        return json_ok(app.store.list());
+        let scenarios: Vec<_> = app
+            .store
+            .list()
+            .into_iter()
+            .map(|scenario| {
+                let best = scenario
+                    .latest_successful_run_id
+                    .as_ref()
+                    .and_then(|run| {
+                        results::load(&app.store.run_dir(&scenario.id, run).join("results")).ok()
+                    })
+                    .and_then(|report| {
+                        results::best_strategy(&report).map(|strategy| {
+                            json!({
+                                "hash": strategy.hash,
+                                "params": strategy.params,
+                                "completion_pct": strategy.stats.completion_pct,
+                                "mean_is_pct": strategy.stats.mean_is_pct,
+                                "p15_is_pct": strategy.stats.p15_is_pct,
+                                "p50_is_pct": strategy.stats.p50_is_pct,
+                                "p90_is_pct": strategy.stats.p90_is_pct,
+                                "fees": strategy.stats.fees,
+                                "avg_trades": strategy.stats.avg_trades,
+                                "avg_mean_divergence": strategy.stats.avg_mean_divergence,
+                                "avg_max_divergence": strategy.stats.avg_max_divergence,
+                                "status_pct": strategy.stats.status_pct,
+                            })
+                        })
+                    });
+                let mut value = serde_json::to_value(scenario).unwrap();
+                value["best_strategy"] = best.unwrap_or(Value::Null);
+                value
+            })
+            .collect();
+        return json_ok(scenarios);
     }
 
     let parts: Vec<_> = path.trim_matches('/').split('/').collect();
