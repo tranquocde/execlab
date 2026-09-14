@@ -9,7 +9,7 @@ execlab-core = { path = "../core" }
 # `backtest` only: the default features include `live`, which pulls in iceoryx2
 # (an IPC transport) whose build script needs libclang/bindgen. We don't need it
 # yet. When we do go live, re-enable `live` and install `libclang-dev`.
-hftbacktest = { path = "../../hftbacktest", default-features = false, features = ["backtest"] }
+hftbacktest = { path = "/home/polykiller/detran/hftbacktest/hftbacktest", default-features = false, features = ["backtest"] }
 
 serde      = { version = "1", features = ["derive"] }
 serde_json = "1"

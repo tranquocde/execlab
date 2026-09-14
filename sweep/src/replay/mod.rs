@@ -163,10 +163,10 @@ pub fn replay<A: Alpha>(args: Args) -> Result<ReplayResult, String> {
             cache.display()
         ));
     }
-    println!(
-        "tier-A pnl {}, replay pnl {}, abs_diff {}, final_pos {}",
-        verify.tier_a_pnl, verify.replay_pnl, verify.abs_diff, verify.final_position,
-    );
+    // println!(
+    //     "tier-A pnl {}, replay pnl {}, abs_diff {}, final_pos {}",
+    //     verify.tier_a_pnl, verify.replay_pnl, verify.abs_diff, verify.final_position,
+    // );
 
     if !verify.matches {
         return Err(format!(

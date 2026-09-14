@@ -514,20 +514,20 @@ fn route(
                     Ok(output) => {
                         let stdout = String::from_utf8_lossy(&output.stdout);
                         let stderr = String::from_utf8_lossy(&output.stderr);
-                        if !stdout.trim().is_empty() {
-                            eprintln!(
-                                "[execviz replay] stdout for {}:\n{}",
-                                target.identity,
-                                stdout.trim()
-                            );
-                        }
-                        if !stderr.trim().is_empty() {
-                            eprintln!(
-                                "[execviz replay] stderr for {}:\n{}",
-                                target.identity,
-                                stderr.trim()
-                            );
-                        }
+                        // if !stdout.trim().is_empty() {
+                        //     eprintln!(
+                        //         "[execviz replay] stdout for {}:\n{}",
+                        //         target.identity,
+                        //         stdout.trim()
+                        //     );
+                        // }
+                        // if !stderr.trim().is_empty() {
+                        //     eprintln!(
+                        //         "[execviz replay] stderr for {}:\n{}",
+                        //         target.identity,
+                        //         stderr.trim()
+                        //     );
+                        // }
                         if output.status.success() {
                             eprintln!("[execviz replay] complete: {}", target.identity);
                             "complete".into()
