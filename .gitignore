@@ -11,12 +11,12 @@
 
 # Develop-mode run snapshots and logs
 /.execlab/runs/
-/trader_viz/.env
 /trader_viz/state/
 
 # Local configuration and credentials. Commit *.env.example templates only.
 **/.env
 !**/.env.example
+!/trader_viz/.env
 
 # Local ngrok policy contains Basic Auth credentials
 /ngrok-traffic-policy.yml

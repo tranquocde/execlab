@@ -1,7 +1,7 @@
 use std::{
     collections::HashMap,
-    fs::{self, OpenOptions},
-    io::{Read, Write},
+    fs::{self, File, OpenOptions},
+    io::{Read, Seek, SeekFrom, Write},
     net::{TcpListener, TcpStream},
     path::PathBuf,
     process::{Command, Stdio},
@@ -42,6 +42,27 @@ fn error(status: u16, message: impl ToString) -> Response {
             .to_string()
             .into_bytes(),
     )
+}
+
+fn log_tail(path: &std::path::Path, max_bytes: u64) -> String {
+    let Ok(mut file) = File::open(path) else {
+        return String::new();
+    };
+    let len = file.metadata().map_or(0, |metadata| metadata.len());
+    let start = len.saturating_sub(max_bytes);
+    if file.seek(SeekFrom::Start(start)).is_err() {
+        return String::new();
+    }
+    let mut bytes = Vec::new();
+    if file.read_to_end(&mut bytes).is_err() {
+        return String::new();
+    }
+    if start > 0 {
+        if let Some(newline) = bytes.iter().position(|byte| *byte == b'\n') {
+            bytes.drain(..=newline);
+        }
+    }
+    String::from_utf8_lossy(&bytes).into_owned()
 }
 
 fn interval_files(config: &Config, symbol: &str) -> Result<Vec<IntervalFile>, String> {
@@ -96,7 +117,10 @@ fn params(draft: &crate::model::Scenario) -> Value {
     json!({"strategy": "twap_sell", "params": values})
 }
 
-fn start_run(app: &Arc<App>, scenario_id: &str) -> Result<RunRecord, String> {
+fn start_run(app: &Arc<App>, scenario_id: &str, mode: &str) -> Result<RunRecord, String> {
+    if !matches!(mode, "debug" | "release") {
+        return Err("run mode must be debug or release".into());
+    }
     if app.active.lock().unwrap().contains_key(scenario_id) {
         return Err("scenario already has a running attempt".into());
     }
@@ -146,9 +170,12 @@ fn start_run(app: &Arc<App>, scenario_id: &str) -> Result<RunRecord, String> {
         .join(&scenario.order.symbol);
     let output_dir = run_dir.join("results");
     let mut command = Command::new("cargo");
+    command.current_dir(&app.config.workspace).arg("run");
+    if mode == "release" {
+        command.arg("--release");
+    }
     command
-        .current_dir(&app.config.workspace)
-        .args(["run", "--bin", "execlab", "--", "twap_sell", "--data-dir"])
+        .args(["--bin", "execlab", "--", "twap_sell", "--data-dir"])
         .arg(&market_dir)
         .arg("--out")
         .arg(&output_dir)
@@ -338,7 +365,11 @@ fn route(app: &Arc<App>, method: &str, target: &str, body: &[u8]) -> Response {
                 .unwrap_or_else(|e| error(400, e));
         }
         if parts.get(3) == Some(&"run") && method == "POST" {
-            return start_run(app, id)
+            let mode = query(target)
+                .get("mode")
+                .cloned()
+                .unwrap_or_else(|| "debug".into());
+            return start_run(app, id, &mode)
                 .map(json_ok)
                 .unwrap_or_else(|e| error(400, e));
         }
@@ -374,6 +405,10 @@ fn route(app: &Arc<App>, method: &str, target: &str, body: &[u8]) -> Response {
                         }));
                     let mut value = serde_json::to_value(run).map_err(|e| e.to_string())?;
                     value["progress"] = progress;
+                    value["log_tail"] = Value::String(log_tail(
+                        &app.store.run_dir(id, &run_id).join("run.log"),
+                        64 * 1024,
+                    ));
                     Ok(value)
                 });
             return result.map(json_ok).unwrap_or_else(|e| error(404, e));
