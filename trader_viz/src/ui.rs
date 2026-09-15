@@ -1,5 +1,5 @@
 pub const PAGE: &str = r####"<!doctype html>
-<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="icon" type="image/png" href="/icon.png">
 <title>TradeLens</title>
 <style>
 :root{--ink:#161820;--muted:#70727b;--line:#b8bac2;--paper:#fafafa;--panel:#fff;--purple:#6d3bc1;--green:#16813b;--red:#ba2c36;--blue:#2563a8;--orange:#d36b22}
