@@ -20,6 +20,9 @@ from hftbacktest.data.utils.vps import convert
 
 
 DEFAULT_SYMBOLS = ["VNM", "MCH", "STB", "TCX", "VCK", "BID", "VCB"]
+PRICE_SCALE = 1_000.0
+VOLUME_SCALE = 10.0
+TRADE_EVENT = 2
 EXPECTED_DTYPE = (
     "ev",
     "exch_ts",
@@ -114,6 +117,12 @@ def main() -> None:
                         output_filename=str(temporary_output),
                         verbose=False,
                     )
+                    events = events.copy()
+                    trade = events["ev"] & TRADE_EVENT != 0
+                    events["px"][trade] *= PRICE_SCALE
+                    events["qty"] *= VOLUME_SCALE
+                    events["ival"][trade] *= int(VOLUME_SCALE)
+                    np.savez_compressed(temporary_output, data=events)
                     validate(temporary_output, len(events))
                     os.replace(temporary_output, destination)
                 finally:

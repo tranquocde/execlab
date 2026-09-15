@@ -19,6 +19,8 @@ use zip::{write::SimpleFileOptions, CompressionMethod, ZipWriter};
 const DEFAULT_SYMBOLS: &[&str] = &["VNM", "MCH", "STB", "TCX", "VCK", "BID", "VCB"];
 const DAY_NS: i64 = 86_400_000_000_000;
 const ICT_OFFSET_NS: i64 = 7 * 3_600_000_000_000;
+const PRICE_SCALE: f64 = 1_000.0;
+const VOLUME_SCALE: f64 = 10.0;
 
 #[derive(Debug)]
 struct Args {
@@ -154,7 +156,7 @@ fn parse_level(value: &str) -> Result<(f64, f64), String> {
         .ok_or("book level has no quantity")?
         .parse::<f64>()
         .map_err(|e| format!("invalid book quantity: {e}"))?;
-    Ok((px * 1_000.0, qty))
+    Ok((px * PRICE_SCALE, qty * VOLUME_SCALE))
 }
 
 fn exchange_timestamp(local_ts: i64, time: Option<&str>) -> Result<i64, String> {
@@ -361,13 +363,15 @@ fn convert_session(
             let total_volume = data
                 .get("totalVol")
                 .and_then(|v| v.as_i64().or_else(|| v.as_str()?.parse().ok()))
-                .unwrap_or(0);
+                .unwrap_or(0)
+                .checked_mul(VOLUME_SCALE as i64)
+                .ok_or("scaled totalVol overflows i64")?;
             events.get_mut(symbol).unwrap().push(event(
                 TRADE_EVENT | side_flag,
                 exch_ts,
                 local_ts,
-                json_f64(data, "lastPrice")?,
-                json_f64(data, "lastVol")?,
+                json_f64(data, "lastPrice")? * PRICE_SCALE,
+                json_f64(data, "lastVol")? * VOLUME_SCALE,
                 total_volume,
             ));
         }
