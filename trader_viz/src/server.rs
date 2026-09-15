@@ -275,6 +275,9 @@ fn route(app: &Arc<App>, method: &str, target: &str, body: &[u8]) -> Response {
             crate::ui::PAGE.as_bytes().to_vec(),
         );
     }
+    if method == "GET" && path == "/icon.png" {
+        return (200, "image/png", include_bytes!("../../icon.png").to_vec());
+    }
     if method == "GET" && path == "/api/meta" {
         return json_ok(
             json!({"timeframe": app.config.timeframe, "data_dir": app.config.data_dir, "symbols": symbols(&app.config)}),
