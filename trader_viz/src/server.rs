@@ -313,7 +313,7 @@ fn route(app: &Arc<App>, method: &str, target: &str, body: &[u8]) -> Response {
                                 "p15_is_pct": strategy.stats.p15_is_pct,
                                 "p50_is_pct": strategy.stats.p50_is_pct,
                                 "p90_is_pct": strategy.stats.p90_is_pct,
-                                "fees": strategy.stats.fees,
+                                "avg_fee": strategy.stats.avg_fee,
                                 "avg_trades": strategy.stats.avg_trades,
                                 "avg_mean_divergence": strategy.stats.avg_mean_divergence,
                                 "avg_max_divergence": strategy.stats.avg_max_divergence,

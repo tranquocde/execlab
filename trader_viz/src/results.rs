@@ -29,7 +29,7 @@ pub struct Stats {
     pub p50_is_pct: Option<f64>,
     pub p90_is_pct: Option<f64>,
     pub completion_pct: Option<f64>,
-    pub fees: f64,
+    pub avg_fee: Option<f64>,
     pub avg_trades: Option<f64>,
     pub avg_percent_filled: Option<f64>,
     pub avg_mean_divergence: Option<f64>,
@@ -158,6 +158,7 @@ fn stats(intervals: &[IntervalResult]) -> Stats {
         .filter_map(|i| i.max_divergence_score)
         .collect();
     let trades: Vec<_> = intervals.iter().map(|i| i.num_trades as f64).collect();
+    let fees: Vec<_> = intervals.iter().map(|i| i.fee).collect();
     let percent_filled: Vec<_> = intervals.iter().filter_map(|i| i.percent_filled).collect();
     let avg = |v: &[f64]| (!v.is_empty()).then(|| v.iter().sum::<f64>() / v.len() as f64);
     Stats {
@@ -167,7 +168,7 @@ fn stats(intervals: &[IntervalResult]) -> Stats {
         p50_is_pct: percentile(&costs, 0.5),
         p90_is_pct: percentile(&costs, 0.9),
         completion_pct: avg(&completions),
-        fees: intervals.iter().map(|i| i.fee).sum(),
+        avg_fee: avg(&fees),
         avg_trades: avg(&trades),
         avg_percent_filled: avg(&percent_filled),
         avg_mean_divergence: avg(&means),
