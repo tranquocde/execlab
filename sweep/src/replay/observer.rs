@@ -98,6 +98,7 @@ pub struct Observed<B> {
     pub curve: Vec<Sample>,
     pub max_inventory: f64,
     pub arrival_mid_price: Option<f64>,
+    arrival_capture_attempted: bool,
 }
 
 impl<B> Observed<B> {
@@ -109,7 +110,27 @@ impl<B> Observed<B> {
             curve: Vec::new(),
             max_inventory: 0.0,
             arrival_mid_price: None,
+            arrival_capture_attempted: false,
         }
+    }
+
+    fn capture_arrival<MD>(&mut self, asset_no: usize)
+    where
+        MD: MarketDepth,
+        B: Bot<MD>,
+    {
+        if self.arrival_capture_attempted {
+            return;
+        }
+        self.arrival_capture_attempted = true;
+        let depth = self.inner.depth(asset_no);
+        let (bid, ask) = (opt(depth.best_bid()), opt(depth.best_ask()));
+        self.arrival_mid_price = match (bid, ask) {
+            (Some(bid), Some(ask)) => Some((bid + ask) / 2.0),
+            (Some(bid), None) => Some(bid),
+            (None, Some(ask)) => Some(ask),
+            (None, None) => None,
+        };
     }
 }
 
@@ -192,10 +213,6 @@ impl<B> Observed<B> {
             (None, Some(a)) => Some(a),
             (None, None) => None,
         };
-        if self.arrival_mid_price.is_none() {
-            self.arrival_mid_price = reference_price;
-        }
-
         if position.abs() > self.max_inventory {
             self.max_inventory = position.abs();
         }
@@ -267,6 +284,7 @@ where
         ot: OrdType,
         wait: bool,
     ) -> Result<ElapseResult, Self::Error> {
+        self.capture_arrival::<MD>(a);
         self.inner
             .submit_buy_order(a, id, price, qty, tif, ot, wait)
     }
@@ -282,6 +300,7 @@ where
         ot: OrdType,
         wait: bool,
     ) -> Result<ElapseResult, Self::Error> {
+        self.capture_arrival::<MD>(a);
         self.inner
             .submit_sell_order(a, id, price, qty, tif, ot, wait)
     }
@@ -292,6 +311,7 @@ where
         o: OrderRequest,
         wait: bool,
     ) -> Result<ElapseResult, Self::Error> {
+        self.capture_arrival::<MD>(a);
         self.inner.submit_order(a, o, wait)
     }
 

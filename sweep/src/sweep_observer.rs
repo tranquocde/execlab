@@ -27,6 +27,7 @@ pub struct SweepObserved<B> {
     n_maker: usize,
     session_start_ts: Option<i64>,
     arrival_mid_price: Option<f64>,
+    arrival_capture_attempted: bool,
     divergence_sum: f64,
     divergence_count: usize,
     max_divergence_score: Option<f64>,
@@ -40,6 +41,7 @@ impl<B> SweepObserved<B> {
             n_maker: 0,
             session_start_ts: None,
             arrival_mid_price: None,
+            arrival_capture_attempted: false,
             divergence_sum: 0.0,
             divergence_count: 0,
             max_divergence_score: None,
@@ -65,15 +67,16 @@ impl<B> SweepObserved<B> {
         self.max_divergence_score
     }
 
-    fn capture_arrival<MD>(&mut self)
+    fn capture_arrival<MD>(&mut self, asset_no: usize)
     where
         MD: MarketDepth,
         B: Bot<MD>,
     {
-        if self.arrival_mid_price.is_some() {
+        if self.arrival_capture_attempted {
             return;
         }
-        let depth = self.inner.depth(0);
+        self.arrival_capture_attempted = true;
+        let depth = self.inner.depth(asset_no);
         let (bid, ask) = (depth.best_bid(), depth.best_ask());
         self.arrival_mid_price = match (bid.is_finite(), ask.is_finite()) {
             (true, true) => Some((bid + ask) / 2.0),
@@ -169,6 +172,7 @@ where
         order_type: OrdType,
         wait: bool,
     ) -> Result<ElapseResult, Self::Error> {
+        self.capture_arrival::<MD>(asset_no);
         self.count_submission(order_type);
         self.inner.submit_buy_order(
             asset_no,
@@ -192,6 +196,7 @@ where
         order_type: OrdType,
         wait: bool,
     ) -> Result<ElapseResult, Self::Error> {
+        self.capture_arrival::<MD>(asset_no);
         self.count_submission(order_type);
         self.inner.submit_sell_order(
             asset_no,
@@ -210,6 +215,7 @@ where
         order: OrderRequest,
         wait: bool,
     ) -> Result<ElapseResult, Self::Error> {
+        self.capture_arrival::<MD>(asset_no);
         self.count_submission(order.order_type);
         self.inner.submit_order(asset_no, order, wait)
     }
@@ -260,7 +266,6 @@ where
         if self.session_start_ts.is_none() {
             self.session_start_ts = Some(self.inner.current_timestamp());
         }
-        self.capture_arrival::<MD>();
         self.sample_divergence::<MD>();
         Ok(result)
     }
@@ -270,7 +275,6 @@ where
         if self.session_start_ts.is_none() {
             self.session_start_ts = Some(self.inner.current_timestamp());
         }
-        self.capture_arrival::<MD>();
         self.sample_divergence::<MD>();
         Ok(result)
     }
