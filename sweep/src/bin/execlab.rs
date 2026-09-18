@@ -14,7 +14,12 @@
 
 use execlab::{alphas, engine, status, Entry};
 
-use std::{env, fs, path::Path, time::Instant};
+use std::{
+    collections::HashSet,
+    env, fs,
+    path::{Path, PathBuf},
+    time::Instant,
+};
 
 // ---------------------------------------------------------------- registry
 
@@ -32,6 +37,7 @@ struct Args {
     params_file: Option<String>,
     initial_position: Option<f64>,
     progress_file: Option<String>,
+    sessions_file: Option<String>,
 }
 
 fn parse_args() -> Args {
@@ -47,6 +53,7 @@ fn parse_args() -> Args {
         params_file: None,
         initial_position: None,
         progress_file: None,
+        sessions_file: None,
     };
 
     let mut it = env::args().skip(1);
@@ -73,10 +80,43 @@ fn parse_args() -> Args {
             "--progress-file" => {
                 a.progress_file = Some(it.next().expect("--progress-file needs a value"))
             }
+            "--sessions-file" => {
+                a.sessions_file = Some(it.next().expect("--sessions-file needs a value"))
+            }
             other => a.only.push(other.to_string()), // positional = alpha name
         }
     }
     a
+}
+
+fn selected_sessions(path: &str) -> Result<HashSet<PathBuf>, String> {
+    let text = fs::read_to_string(path)
+        .map_err(|error| format!("cannot read session selection {path}: {error}"))?;
+    let paths: Vec<PathBuf> = serde_json::from_str(&text)
+        .map_err(|error| format!("cannot parse session selection {path}: {error}"))?;
+    if paths.is_empty() {
+        return Err(format!("session selection {path} is empty"));
+    }
+    paths
+        .into_iter()
+        .map(|session| {
+            if session
+                .extension()
+                .is_none_or(|extension| extension != "npz")
+            {
+                return Err(format!(
+                    "selected session is not an .npz file: {}",
+                    session.display()
+                ));
+            }
+            session.canonicalize().map_err(|error| {
+                format!(
+                    "cannot resolve selected session {}: {error}",
+                    session.display()
+                )
+            })
+        })
+        .collect()
 }
 
 // ---------------------------------------------------------------- main
@@ -152,6 +192,12 @@ fn main() {
             std::process::exit(1);
         })
     });
+    let session_selection = args.sessions_file.as_deref().map(|path| {
+        selected_sessions(path).unwrap_or_else(|error| {
+            eprintln!("{error}");
+            std::process::exit(1);
+        })
+    });
 
     for e in &selected {
         let mut config = engine::AlphaRunConfig::from_json(e.config_json)
@@ -171,6 +217,20 @@ fn main() {
         });
         let out = Path::new(out_dir);
         fs::create_dir_all(out).unwrap();
+        if let Some(selected) = &session_selection {
+            let discovered: HashSet<_> = market_dirs
+                .iter()
+                .flat_map(|market| engine::npz_files(&market.to_string_lossy()))
+                .filter_map(|path| path.canonicalize().ok())
+                .collect();
+            if let Some(missing) = selected.iter().find(|path| !discovered.contains(*path)) {
+                eprintln!(
+                    "selected session is outside --data-dir or was not discovered: {}",
+                    missing.display()
+                );
+                std::process::exit(1);
+            }
+        }
         eprintln!(
             "{} | {} market(s) from {} | batch {}",
             e.name,
@@ -181,7 +241,16 @@ fn main() {
 
         for market_dir in market_dirs {
             let market_dir = market_dir.to_string_lossy();
-            let files = engine::npz_files(&market_dir);
+            let mut files = engine::npz_files(&market_dir);
+            if let Some(selected) = &session_selection {
+                files.retain(|path| {
+                    path.canonicalize()
+                        .is_ok_and(|canonical| selected.contains(&canonical))
+                });
+            }
+            if files.is_empty() {
+                continue;
+            }
             eprintln!("--- market {} | {} sessions ---", market_dir, files.len());
             eprintln!("=== {} (code {}) ===", e.name, e.code_hash);
             let t = Instant::now();

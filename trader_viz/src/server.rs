@@ -3,7 +3,7 @@ use std::{
     fs::{self, File, OpenOptions},
     io::{Read, Seek, SeekFrom, Write},
     net::{TcpListener, TcpStream},
-    path::PathBuf,
+    path::{Path, PathBuf},
     process::{Command, Stdio},
     sync::{Arc, Mutex},
     thread,
@@ -92,6 +92,38 @@ fn interval_files(config: &Config, symbol: &str) -> Result<Vec<IntervalFile>, St
         .collect())
 }
 
+fn select_intervals(intervals: Vec<IntervalFile>, mode: &str) -> Result<Vec<IntervalFile>, String> {
+    match mode {
+        "all_available" => Ok(intervals),
+        "latest_10" => {
+            let start = intervals.len().saturating_sub(10);
+            Ok(intervals.into_iter().skip(start).collect())
+        }
+        _ => Err(format!("unsupported historical selection: {mode}")),
+    }
+}
+
+fn history_range(run: &RunRecord) -> Value {
+    let mut intervals: Vec<String> = run
+        .resolved_intervals
+        .iter()
+        .filter_map(|path| {
+            Path::new(path)
+                .file_stem()
+                .map(|name| name.to_string_lossy().into_owned())
+        })
+        .collect();
+    intervals.sort();
+    match (intervals.first(), intervals.last()) {
+        (Some(first), Some(last)) => json!({
+            "count": intervals.len(),
+            "first": first,
+            "last": last,
+        }),
+        _ => Value::Null,
+    }
+}
+
 fn symbols(config: &Config) -> Vec<String> {
     let mut result: Vec<_> = fs::read_dir(config.data_dir.join(&config.timeframe))
         .into_iter()
@@ -131,7 +163,10 @@ fn start_run(app: &Arc<App>, scenario_id: &str, mode: &str) -> Result<RunRecord,
         return Err("scenario already has a running attempt".into());
     }
     let mut scenario = app.store.get(scenario_id)?;
-    let intervals = interval_files(&app.config, &scenario.order.symbol)?;
+    let intervals = select_intervals(
+        interval_files(&app.config, &scenario.order.symbol)?,
+        &scenario.historical_selection.mode,
+    )?;
     if intervals.is_empty() {
         return Err("no available intervals for selected symbol".into());
     }
@@ -142,6 +177,17 @@ fn start_run(app: &Arc<App>, scenario_id: &str, mode: &str) -> Result<RunRecord,
     fs::write(
         run_dir.join("params.json"),
         serde_json::to_vec_pretty(&generated).unwrap(),
+    )
+    .map_err(|e| e.to_string())?;
+    fs::write(
+        run_dir.join("sessions.json"),
+        serde_json::to_vec_pretty(
+            &intervals
+                .iter()
+                .map(|interval| &interval.path)
+                .collect::<Vec<_>>(),
+        )
+        .unwrap(),
     )
     .map_err(|e| e.to_string())?;
     let mut run = RunRecord {
@@ -189,6 +235,8 @@ fn start_run(app: &Arc<App>, scenario_id: &str, mode: &str) -> Result<RunRecord,
         .arg(run_dir.join("params.json"))
         .arg("--progress-file")
         .arg(run_dir.join("progress.json"))
+        .arg("--sessions-file")
+        .arg(run_dir.join("sessions.json"))
         .arg("--initial-position")
         .arg(
             scenario
@@ -303,11 +351,15 @@ fn route(app: &Arc<App>, method: &str, target: &str, body: &[u8]) -> Response {
             .list()
             .into_iter()
             .map(|scenario| {
-                let best = scenario
+                let successful_run = scenario
                     .latest_successful_run_id
                     .as_ref()
+                    .and_then(|run| app.store.get_run(&scenario.id, run).ok());
+                let best = successful_run
+                    .as_ref()
                     .and_then(|run| {
-                        results::load(&app.store.run_dir(&scenario.id, run).join("results")).ok()
+                        results::load(&app.store.run_dir(&scenario.id, &run.id).join("results"))
+                            .ok()
                     })
                     .and_then(|report| {
                         results::best_strategy(&report).map(|strategy| {
@@ -329,6 +381,10 @@ fn route(app: &Arc<App>, method: &str, target: &str, body: &[u8]) -> Response {
                     });
                 let mut value = serde_json::to_value(scenario).unwrap();
                 value["best_strategy"] = best.unwrap_or(Value::Null);
+                value["history_range"] = successful_run
+                    .as_ref()
+                    .map(history_range)
+                    .unwrap_or(Value::Null);
                 value
             })
             .collect();
@@ -600,4 +656,35 @@ pub fn serve(config: Config) -> Result<(), String> {
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn intervals(count: usize) -> Vec<IntervalFile> {
+        (0..count)
+            .map(|index| IntervalFile {
+                id: format!("interval-{index:02}"),
+                file: format!("interval-{index:02}.npz"),
+                path: format!("/data/interval-{index:02}.npz"),
+                status: "ready",
+            })
+            .collect()
+    }
+
+    #[test]
+    fn latest_ten_preserves_chronological_order() {
+        let selected = select_intervals(intervals(14), "latest_10").unwrap();
+        assert_eq!(selected.len(), 10);
+        assert_eq!(selected.first().unwrap().id, "interval-04");
+        assert_eq!(selected.last().unwrap().id, "interval-13");
+    }
+
+    #[test]
+    fn latest_ten_keeps_all_when_fewer_are_available() {
+        let selected = select_intervals(intervals(4), "latest_10").unwrap();
+        assert_eq!(selected.len(), 4);
+        assert_eq!(selected.first().unwrap().id, "interval-00");
+    }
 }

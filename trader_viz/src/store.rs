@@ -6,7 +6,7 @@ use std::{
 
 use uuid::Uuid;
 
-use crate::model::{parse_start_time, HistoricalSelection, RunRecord, Scenario, ScenarioDraft};
+use crate::model::{parse_start_time, RunRecord, Scenario, ScenarioDraft};
 
 pub fn now() -> u64 {
     SystemTime::now()
@@ -71,16 +71,14 @@ impl Store {
         validate_draft(&draft)?;
         let time = now();
         let scenario = Scenario {
-            schema_version: 2,
+            schema_version: 3,
             id: Uuid::new_v4().to_string(),
             name: draft.name.trim().to_string(),
             description: draft.description,
             tags: draft.tags,
             order: draft.order,
             strategies: draft.strategies,
-            historical_selection: HistoricalSelection {
-                mode: "all_available".into(),
-            },
+            historical_selection: draft.historical_selection,
             latest_successful_run_id: None,
             last_attempt_run_id: None,
             created_at: time,
@@ -97,12 +95,13 @@ impl Store {
     pub fn update(&self, id: &str, draft: ScenarioDraft) -> Result<Scenario, String> {
         validate_draft(&draft)?;
         let mut scenario = self.get(id)?;
-        scenario.schema_version = 2;
+        scenario.schema_version = 3;
         scenario.name = draft.name.trim().into();
         scenario.description = draft.description;
         scenario.tags = draft.tags;
         scenario.order = draft.order;
         scenario.strategies = draft.strategies;
+        scenario.historical_selection = draft.historical_selection;
         scenario.updated_at = now();
         self.save(&scenario)?;
         Ok(scenario)
@@ -124,6 +123,7 @@ impl Store {
             tags: source.tags,
             order: source.order,
             strategies: source.strategies,
+            historical_selection: source.historical_selection,
         })
     }
 
@@ -161,6 +161,12 @@ fn validate_draft(draft: &ScenarioDraft) -> Result<(), String> {
     if draft.strategies.len() != 1 || draft.strategies[0].name != "twap_sell" {
         return Err("prototype requires twap_sell".into());
     }
+    if !matches!(
+        draft.historical_selection.mode.as_str(),
+        "all_available" | "latest_10"
+    ) {
+        return Err("historical selection must be all_available or latest_10".into());
+    }
     let input = &draft.strategies[0].inputs;
     if input.start_times.is_empty()
         || input.time_taken_seconds.is_empty()
@@ -192,7 +198,7 @@ fn validate_draft(draft: &ScenarioDraft) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::{OrderSpec, Side, StrategySpec, TwapInputs};
+    use crate::model::{HistoricalSelection, OrderSpec, Side, StrategySpec, TwapInputs};
 
     fn draft(name: &str) -> ScenarioDraft {
         ScenarioDraft {
@@ -212,6 +218,7 @@ mod tests {
                     trade_frequency_seconds: vec![30.0, 60.0],
                 },
             }],
+            historical_selection: HistoricalSelection::default(),
         }
     }
 

@@ -78,8 +78,16 @@ pub struct HistoricalSelection {
     pub mode: String,
 }
 
+impl Default for HistoricalSelection {
+    fn default() -> Self {
+        Self {
+            mode: "all_available".into(),
+        }
+    }
+}
+
 fn schema_version() -> u32 {
-    2
+    3
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -94,6 +102,7 @@ pub struct Scenario {
     pub tags: Vec<String>,
     pub order: OrderSpec,
     pub strategies: Vec<StrategySpec>,
+    #[serde(default)]
     pub historical_selection: HistoricalSelection,
     pub latest_successful_run_id: Option<String>,
     pub last_attempt_run_id: Option<String>,
@@ -110,6 +119,8 @@ pub struct ScenarioDraft {
     pub tags: Vec<String>,
     pub order: OrderSpec,
     pub strategies: Vec<StrategySpec>,
+    #[serde(default)]
+    pub historical_selection: HistoricalSelection,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
