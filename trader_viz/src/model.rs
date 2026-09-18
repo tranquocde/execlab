@@ -25,8 +25,46 @@ pub struct OrderSpec {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct TwapInputs {
-    pub elapse_seconds: Vec<f64>,
-    pub slice_quantity: Vec<f64>,
+    #[serde(default = "default_start_times")]
+    pub start_times: Vec<String>,
+    #[serde(default = "default_time_taken_seconds")]
+    pub time_taken_seconds: Vec<f64>,
+    #[serde(default = "default_trade_frequency_seconds")]
+    pub trade_frequency_seconds: Vec<f64>,
+}
+
+fn default_start_times() -> Vec<String> {
+    vec!["10:00:00".into()]
+}
+
+fn default_time_taken_seconds() -> Vec<f64> {
+    vec![1_800.0]
+}
+
+fn default_trade_frequency_seconds() -> Vec<f64> {
+    vec![60.0]
+}
+
+pub fn parse_start_time(value: &str) -> Result<i64, String> {
+    let parts: Vec<_> = value.trim().split(':').collect();
+    if !(2..=3).contains(&parts.len()) {
+        return Err(format!("invalid start time {value:?}; expected HH:MM[:SS]"));
+    }
+    let parse = |part: &str| {
+        part.parse::<i64>()
+            .map_err(|_| format!("invalid start time {value:?}; expected HH:MM[:SS]"))
+    };
+    let hour = parse(parts[0])?;
+    let minute = parse(parts[1])?;
+    let second = if parts.len() == 3 {
+        parse(parts[2])?
+    } else {
+        0
+    };
+    if hour < 0 || minute < 0 || second < 0 || hour >= 24 || minute >= 60 || second >= 60 {
+        return Err(format!("invalid start time {value:?}; expected HH:MM[:SS]"));
+    }
+    Ok(hour * 3_600 + minute * 60 + second)
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -41,7 +79,7 @@ pub struct HistoricalSelection {
 }
 
 fn schema_version() -> u32 {
-    1
+    2
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -105,4 +143,22 @@ pub struct IntervalFile {
     pub file: String,
     pub path: String,
     pub status: &'static str,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_start_time;
+
+    #[test]
+    fn parses_ict_wall_clock_times() {
+        assert_eq!(parse_start_time("10:30").unwrap(), 37_800);
+        assert_eq!(parse_start_time("10:30:15").unwrap(), 37_815);
+    }
+
+    #[test]
+    fn rejects_out_of_range_wall_clock_times() {
+        assert!(parse_start_time("24:00").is_err());
+        assert!(parse_start_time("10:60:00").is_err());
+        assert!(parse_start_time("10").is_err());
+    }
 }

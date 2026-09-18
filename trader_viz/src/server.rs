@@ -107,11 +107,17 @@ fn symbols(config: &Config) -> Vec<String> {
 fn params(draft: &crate::model::Scenario) -> Value {
     let input = &draft.strategies[0].inputs;
     let mut values = Vec::new();
-    for seconds in &input.elapse_seconds {
-        for qty in &input.slice_quantity {
-            values.push(
-                json!({"elapse_ns": (seconds * 1_000_000_000.0).round() as i64, "slice_qty": qty}),
-            );
+    for start_time in &input.start_times {
+        let start_time_seconds = crate::model::parse_start_time(start_time)
+            .expect("validated scenario contains an invalid start time");
+        for time_taken_seconds in &input.time_taken_seconds {
+            for trade_frequency_seconds in &input.trade_frequency_seconds {
+                values.push(json!({
+                    "start_time_seconds": start_time_seconds,
+                    "time_taken_seconds": time_taken_seconds,
+                    "trade_frequency_seconds": trade_frequency_seconds,
+                }));
+            }
         }
     }
     json!({"strategy": "twap_sell", "params": values})

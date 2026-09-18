@@ -6,7 +6,7 @@ use std::{
 
 use uuid::Uuid;
 
-use crate::model::{HistoricalSelection, RunRecord, Scenario, ScenarioDraft};
+use crate::model::{parse_start_time, HistoricalSelection, RunRecord, Scenario, ScenarioDraft};
 
 pub fn now() -> u64 {
     SystemTime::now()
@@ -71,7 +71,7 @@ impl Store {
         validate_draft(&draft)?;
         let time = now();
         let scenario = Scenario {
-            schema_version: 1,
+            schema_version: 2,
             id: Uuid::new_v4().to_string(),
             name: draft.name.trim().to_string(),
             description: draft.description,
@@ -97,6 +97,7 @@ impl Store {
     pub fn update(&self, id: &str, draft: ScenarioDraft) -> Result<Scenario, String> {
         validate_draft(&draft)?;
         let mut scenario = self.get(id)?;
+        scenario.schema_version = 2;
         scenario.name = draft.name.trim().into();
         scenario.description = draft.description;
         scenario.tags = draft.tags;
@@ -161,18 +162,28 @@ fn validate_draft(draft: &ScenarioDraft) -> Result<(), String> {
         return Err("prototype requires twap_sell".into());
     }
     let input = &draft.strategies[0].inputs;
-    if input.elapse_seconds.is_empty() || input.slice_quantity.is_empty() {
+    if input.start_times.is_empty()
+        || input.time_taken_seconds.is_empty()
+        || input.trade_frequency_seconds.is_empty()
+    {
         return Err("strategy parameter lists cannot be empty".into());
     }
+    for start_time in &input.start_times {
+        parse_start_time(start_time)?;
+    }
     if input
-        .elapse_seconds
+        .time_taken_seconds
         .iter()
-        .chain(input.slice_quantity.iter())
+        .chain(input.trade_frequency_seconds.iter())
         .any(|v| !v.is_finite() || *v <= 0.0)
     {
         return Err("strategy parameters must be positive finite numbers".into());
     }
-    if input.elapse_seconds.len() * input.slice_quantity.len() > 500 {
+    if input.start_times.len()
+        * input.time_taken_seconds.len()
+        * input.trade_frequency_seconds.len()
+        > 500
+    {
         return Err("maximum 500 configurations".into());
     }
     Ok(())
@@ -196,8 +207,9 @@ mod tests {
             strategies: vec![StrategySpec {
                 name: "twap_sell".into(),
                 inputs: TwapInputs {
-                    elapse_seconds: vec![0.1, 2.0],
-                    slice_quantity: vec![100.0, 500.0],
+                    start_times: vec!["10:00:00".into(), "10:30:00".into()],
+                    time_taken_seconds: vec![1_800.0, 3_600.0],
+                    trade_frequency_seconds: vec![30.0, 60.0],
                 },
             }],
         }
