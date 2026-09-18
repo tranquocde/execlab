@@ -27,16 +27,18 @@ struct Args {
     input_dir: PathBuf,
     output_dir: PathBuf,
     symbols: Vec<String>,
+    force: bool,
 }
 
 fn usage() -> &'static str {
-    "usage: vps_convert [--input-dir data/1h] [--output-dir vps_data/1h] \\\n     [--symbols VNM MCH STB TCX VCK BID VCB]"
+    "usage: vps_convert [--input-dir data/1h] [--output-dir vps_data/1h] \\\n     [--symbols VNM MCH STB TCX VCK BID VCB] [--force]"
 }
 
 fn parse_args() -> Result<Args, String> {
     let mut input_dir = PathBuf::from("data/1h");
     let mut output_dir = PathBuf::from("vps_data/1h");
     let mut symbols = Vec::new();
+    let mut force = false;
     let values: Vec<String> = env::args().skip(1).collect();
     let mut i = 0;
     while i < values.len() {
@@ -60,6 +62,7 @@ fn parse_args() -> Result<Args, String> {
                 }
                 continue;
             }
+            "--force" => force = true,
             "-h" | "--help" => {
                 println!("{}", usage());
                 std::process::exit(0);
@@ -77,6 +80,7 @@ fn parse_args() -> Result<Args, String> {
         input_dir,
         output_dir,
         symbols,
+        force,
     })
 }
 
@@ -419,22 +423,59 @@ fn run() -> Result<(), String> {
     let args = parse_args()?;
     let sources = parquet_files(&args.input_dir)?;
     let mut converted = 0;
+    let mut skipped = 0;
     for source in sources {
-        let (mut by_symbol, invalid) = convert_session(&source, &args.symbols)?;
+        let stem = source.file_stem().unwrap().to_string_lossy();
+        let mut pending = Vec::new();
+        for symbol in &args.symbols {
+            let destination = args.output_dir.join(symbol).join(format!("{stem}.npz"));
+            if args.force {
+                pending.push(symbol.clone());
+                continue;
+            }
+            match event_count(&destination) {
+                Ok(Some(count)) if count > 0 => {
+                    println!(
+                        "  skipped  {symbol:4} events={count:>8}  {}",
+                        destination.display()
+                    );
+                    skipped += 1;
+                }
+                Ok(Some(_)) => {
+                    println!(
+                        "  invalid  {symbol:4} empty output; regenerating  {}",
+                        destination.display()
+                    );
+                    pending.push(symbol.clone());
+                }
+                Ok(None) => pending.push(symbol.clone()),
+                Err(error) => {
+                    println!("  invalid  {symbol:4} {error}; regenerating");
+                    pending.push(symbol.clone());
+                }
+            }
+        }
+        if pending.is_empty() {
+            println!(
+                "SESSION {}: all requested outputs already exist; skipped",
+                source.file_name().unwrap().to_string_lossy()
+            );
+            continue;
+        }
+        let (mut by_symbol, invalid) = convert_session(&source, &pending)?;
         println!(
             "SESSION {}: excluded {} invalid blank-side trades",
             source.file_name().unwrap().to_string_lossy(),
             invalid
         );
-        let stem = source.file_stem().unwrap().to_string_lossy();
-        for symbol in &args.symbols {
+        for symbol in &pending {
             let events = by_symbol.remove(symbol).unwrap();
             let asset_dir = args.output_dir.join(symbol);
             fs::create_dir_all(&asset_dir)
                 .map_err(|e| format!("cannot create {}: {e}", asset_dir.display()))?;
             let destination = asset_dir.join(format!("{stem}.npz"));
             let temporary = asset_dir.join(format!(".{stem}.convert.tmp.npz"));
-            let old = event_count(&destination)?;
+            let old = event_count(&destination).ok().flatten();
             if temporary.exists() {
                 fs::remove_file(&temporary)
                     .map_err(|e| format!("cannot remove {}: {e}", temporary.display()))?;
@@ -473,7 +514,9 @@ fn run() -> Result<(), String> {
             converted += 1;
         }
     }
-    println!("DONE: converted {converted} symbol/session files; unrelated files preserved");
+    println!(
+        "DONE: converted {converted}, skipped {skipped} existing symbol/session files; unrelated files preserved"
+    );
     Ok(())
 }
 
