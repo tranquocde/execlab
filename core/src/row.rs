@@ -14,6 +14,28 @@ use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 
+/// JSON has no representation for NaN. Failed simulations intentionally use
+/// NaN for unavailable ledger values, which serde_json writes as `null`.
+/// Convert that `null` back to NaN so failed rows remain readable instead of
+/// making the complete strategy file fail deserialization.
+mod nullable_f64 {
+    use serde::{Deserialize, Deserializer, Serialize, Serializer};
+
+    pub fn serialize<S>(value: &f64, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        value.is_finite().then_some(*value).serialize(serializer)
+    }
+
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<f64, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        Ok(Option::<f64>::deserialize(deserializer)?.unwrap_or(f64::NAN))
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct SessionRow {
     /// Filename stem — stable id, and the handle tier-B replay takes.
@@ -31,18 +53,22 @@ pub struct SessionRow {
 
     // ---- ledger ----
     /// Total PnL under the configured terminal-valuation mode.
+    #[serde(with = "nullable_f64")]
     pub pnl: f64,
     /// Cash at session end, before settling inventory.
+    #[serde(with = "nullable_f64")]
     pub balance: f64,
     /// Cumulative fees (negative = rebate earned).
+    #[serde(with = "nullable_f64")]
     pub fee: f64,
     /// Inventory held immediately before the strategy starts.
-    #[serde(default)]
+    #[serde(default, with = "nullable_f64")]
     pub start_position: f64,
     /// First valid book reference price observed after market data starts.
     #[serde(default)]
     pub arrival_mid_price: Option<f64>,
     /// Leftover inventory at the end of the session.
+    #[serde(with = "nullable_f64")]
     pub final_inventory: f64,
     /// Terminal valuation price: binary outcome for prediction markets, or
     /// final reference price for mark-to-market assets.
@@ -80,7 +106,9 @@ pub struct SessionRow {
     #[serde(default)]
     pub n_maker: usize,
     pub num_trades: i64,
+    #[serde(with = "nullable_f64")]
     pub trading_volume: f64,
+    #[serde(with = "nullable_f64")]
     pub trading_value: f64,
 
     /// `Some(reason)` if the session failed; `pnl` is then meaningless.
@@ -223,6 +251,19 @@ mod tests {
         let row = costs(1_000.0, 400.0, 100.0, 90.0, 600.0, 100.0, 0.0);
         assert_eq!(row.residual_cost, Some(4_000.0));
         assert_eq!(row.implementation_shortfall_pct, Some(4.0));
+    }
+
+    #[test]
+    fn failed_row_round_trips_through_json() {
+        let row = SessionRow::failed(Path::new("session.npz"), "bad book".into());
+        let json = serde_json::to_string(&row).unwrap();
+        assert!(json.contains("\"pnl\":null"));
+
+        let decoded: SessionRow = serde_json::from_str(&json).unwrap();
+        assert!(decoded.pnl.is_nan());
+        assert!(decoded.balance.is_nan());
+        assert!(decoded.start_position.is_nan());
+        assert_eq!(decoded.error.as_deref(), Some("bad book"));
     }
 }
 
