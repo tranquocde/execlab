@@ -280,7 +280,7 @@ fn start_run(app: &Arc<App>, scenario_id: &str, mode: &str) -> Result<RunRecord,
             return;
         }
         let validation = match waited {
-            Ok(status) if status.success() => results::fully_successful(
+            Ok(status) if status.success() => results::validate_complete(
                 &app.store.run_dir(&sid, &rid).join("results"),
                 expected_configs,
                 expected_intervals,

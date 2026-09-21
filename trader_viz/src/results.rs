@@ -247,7 +247,12 @@ pub fn load(results: &Path) -> Result<Performance, String> {
     })
 }
 
-pub fn fully_successful(
+/// Validate that the sweep produced a complete, readable result set.
+///
+/// A session-level backtest error is still a valid result row and is exposed
+/// as `FAIL` by Interval Explorer. Only missing configurations or interval
+/// rows make the whole run unusable.
+pub fn validate_complete(
     results: &Path,
     expected_configs: usize,
     expected_intervals: usize,
@@ -266,9 +271,6 @@ pub fn fully_successful(
                 strategy.hash,
                 strategy.intervals.len()
             ));
-        }
-        if strategy.intervals.iter().any(|i| !i.status_ok) {
-            return Err(format!("{} contains failed intervals", strategy.hash));
         }
     }
     Ok(())
