@@ -144,11 +144,20 @@ fn params(draft: &crate::model::Scenario) -> Value {
             .expect("validated scenario contains an invalid start time");
         for time_taken_seconds in &input.time_taken_seconds {
             for trade_frequency_seconds in &input.trade_frequency_seconds {
-                values.push(json!({
+                let mut value = json!({
                     "start_time_seconds": start_time_seconds,
                     "time_taken_seconds": time_taken_seconds,
                     "trade_frequency_seconds": trade_frequency_seconds,
-                }));
+                });
+                if draft.order.target_mode == crate::model::TargetMode::Notional {
+                    value["target_mode"] = json!("notional");
+                    value["target_notional"] = json!(draft.order.notional);
+                    value["side"] = json!(match draft.order.side {
+                        crate::model::Side::Buy => "buy",
+                        crate::model::Side::Sell => "sell",
+                    });
+                }
+                values.push(value);
             }
         }
     }
@@ -239,11 +248,14 @@ fn start_run(app: &Arc<App>, scenario_id: &str, mode: &str) -> Result<RunRecord,
         .arg(run_dir.join("sessions.json"))
         .arg("--initial-position")
         .arg(
-            scenario
-                .order
-                .side
-                .initial_position(scenario.order.quantity)
-                .to_string(),
+            match scenario.order.target_mode {
+                crate::model::TargetMode::Quantity => scenario
+                    .order
+                    .side
+                    .initial_position(scenario.order.quantity),
+                crate::model::TargetMode::Notional => 0.0,
+            }
+            .to_string(),
         )
         .stdout(Stdio::from(log))
         .stderr(Stdio::from(stderr));

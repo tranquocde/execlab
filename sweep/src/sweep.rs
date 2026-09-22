@@ -140,6 +140,11 @@ pub fn sweep<A, Pop>(
                 row.n_maker = hbt.n_maker();
                 row.mean_divergence_score = hbt.mean_divergence_score();
                 row.max_divergence_score = hbt.max_divergence_score();
+                if let Some(target) = A::execution_target(p) {
+                    row.target_mode = target.mode;
+                    row.target_notional = target.notional;
+                    row.execution_side = Some(target.side);
+                }
                 row.compute_execution_costs();
                 let failed = row.error.is_some();
 

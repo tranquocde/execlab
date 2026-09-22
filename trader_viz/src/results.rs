@@ -56,6 +56,9 @@ pub struct IntervalResult {
     pub start_position: f64,
     pub final_inventory: f64,
     pub final_balance: f64,
+    pub target_mode: execlab_core::TargetMode,
+    pub target_notional: Option<f64>,
+    pub executed_notional: f64,
     pub status_ok: bool,
     pub error: Option<String>,
     pub timeframe: String,
@@ -108,10 +111,17 @@ fn percentile(values: &[f64], p: f64) -> Option<f64> {
 }
 
 fn completion(row: &SessionRow) -> Option<f64> {
-    (row.start_position.is_finite()
-        && row.start_position.abs() > f64::EPSILON
-        && row.final_inventory.is_finite())
-    .then_some(100.0 - row.final_inventory / row.start_position * 100.0)
+    match row.target_mode {
+        execlab_core::TargetMode::Quantity => (row.start_position.is_finite()
+            && row.start_position.abs() > f64::EPSILON
+            && row.final_inventory.is_finite())
+        .then_some(100.0 - row.final_inventory / row.start_position * 100.0),
+        execlab_core::TargetMode::Notional => row
+            .target_notional
+            .filter(|target| target.is_finite() && *target > 0.0)
+            .filter(|_| row.trading_value.is_finite())
+            .map(|target| (row.trading_value / target * 100.0).clamp(0.0, 100.0)),
+    }
 }
 
 fn interval(row: SessionRow, timeframe: String, symbol: String) -> IntervalResult {
@@ -138,6 +148,9 @@ fn interval(row: SessionRow, timeframe: String, symbol: String) -> IntervalResul
         start_position: row.start_position,
         final_inventory: row.final_inventory,
         final_balance: row.balance,
+        target_mode: row.target_mode,
+        target_notional: row.target_notional,
+        executed_notional: row.trading_value,
         status_ok: row.error.is_none(),
         error: row.error,
         timeframe,

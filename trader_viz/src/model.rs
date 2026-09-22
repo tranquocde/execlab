@@ -7,6 +7,14 @@ pub enum Side {
     Sell,
 }
 
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum TargetMode {
+    #[default]
+    Quantity,
+    Notional,
+}
+
 impl Side {
     pub fn initial_position(&self, quantity: f64) -> f64 {
         match self {
@@ -20,7 +28,12 @@ impl Side {
 pub struct OrderSpec {
     pub symbol: String,
     pub side: Side,
+    #[serde(default)]
+    pub target_mode: TargetMode,
+    #[serde(default)]
     pub quantity: f64,
+    #[serde(default)]
+    pub notional: Option<f64>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -87,7 +100,7 @@ impl Default for HistoricalSelection {
 }
 
 fn schema_version() -> u32 {
-    3
+    4
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

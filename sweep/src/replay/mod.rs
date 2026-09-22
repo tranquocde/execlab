@@ -101,7 +101,7 @@ pub fn replay<A: Alpha>(args: Args) -> Result<ReplayResult, String> {
     // Recompute exactly as the sweep does, then check it against tier A.
     // Only numeric fields are compared below; the replay row's source path is
     // not persisted, so use its immediate parent as a harmless local root.
-    let replayed = extract(
+    let mut replayed = extract(
         &src,
         src.parent().unwrap_or(args.data_root),
         &hbt,
@@ -109,6 +109,12 @@ pub fn replay<A: Alpha>(args: Args) -> Result<ReplayResult, String> {
         initial_position,
         hbt.arrival_mid_price,
     );
+    if let Some(target) = A::execution_target(&params) {
+        replayed.target_mode = target.mode;
+        replayed.target_notional = target.notional;
+        replayed.execution_side = Some(target.side);
+    }
+    replayed.compute_execution_costs();
     let diff = (replayed.pnl - row.pnl).abs();
 
     // Fill-level self-check: the fills we recorded must account for the whole

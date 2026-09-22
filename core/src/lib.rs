@@ -7,4 +7,4 @@ pub mod output;
 pub mod row;
 
 pub use output::{is_complete, param_hash, DataRef, Manifest};
-pub use row::{Results, SessionRow};
+pub use row::{ExecutionSide, ExecutionTarget, Results, SessionRow, TargetMode};

@@ -1,5 +1,6 @@
 //! The contract every alpha implements. Written once, never touched again.
 
+use execlab_core::ExecutionTarget;
 use hftbacktest::prelude::{Bot, MarketDepth};
 use serde::{de::DeserializeOwned, Serialize};
 
@@ -13,6 +14,11 @@ pub trait Alpha {
 
     /// The alpha owns its own search space.
     fn search_space() -> Vec<Self::Params>;
+
+    /// Optional execution-target metadata used by generic output accounting.
+    fn execution_target(_p: &Self::Params) -> Option<ExecutionTarget> {
+        None
+    }
 
     /// The trading logic.
     ///

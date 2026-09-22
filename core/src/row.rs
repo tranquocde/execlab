@@ -14,6 +14,37 @@ use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TargetMode {
+    #[default]
+    Quantity,
+    Notional,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ExecutionSide {
+    Buy,
+    Sell,
+}
+
+impl ExecutionSide {
+    pub fn cost_sign(self) -> f64 {
+        match self {
+            Self::Buy => -1.0,
+            Self::Sell => 1.0,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct ExecutionTarget {
+    pub mode: TargetMode,
+    pub side: ExecutionSide,
+    pub notional: Option<f64>,
+}
+
 /// JSON has no representation for NaN. Failed simulations intentionally use
 /// NaN for unavailable ledger values, which serde_json writes as `null`.
 /// Convert that `null` back to NaN so failed rows remain readable instead of
@@ -77,6 +108,14 @@ pub struct SessionRow {
     /// side), falling back to the settlement value when the final book is empty.
     #[serde(default)]
     pub final_mid_price: Option<f64>,
+    /// Target metadata. Missing fields in legacy files deserialize as the
+    /// original quantity-target mode.
+    #[serde(default)]
+    pub target_mode: TargetMode,
+    #[serde(default)]
+    pub target_notional: Option<f64>,
+    #[serde(default)]
+    pub execution_side: Option<ExecutionSide>,
     /// Direction-aware implementation-shortfall components in quote currency.
     /// Positive is adverse and negative means execution beat arrival.
     #[serde(default)]
@@ -136,6 +175,9 @@ impl SessionRow {
             final_inventory: f64::NAN,
             settle: None,
             final_mid_price: None,
+            target_mode: TargetMode::Quantity,
+            target_notional: None,
+            execution_side: None,
             filled_cost: None,
             filled_cost_pct: None,
             residual_cost: None,
@@ -156,9 +198,12 @@ impl SessionRow {
     pub fn compute_execution_costs(&mut self) {
         let arrival = self.arrival_mid_price.filter(|price| price.is_finite());
         let final_mid = self.final_mid_price.filter(|price| price.is_finite());
-        let direction = (self.start_position.is_finite()
-            && self.start_position.abs() > f64::EPSILON)
-            .then(|| self.start_position.signum());
+        let direction = match self.target_mode {
+            TargetMode::Notional => self.execution_side.map(ExecutionSide::cost_sign),
+            TargetMode::Quantity => (self.start_position.is_finite()
+                && self.start_position.abs() > f64::EPSILON)
+                .then(|| self.start_position.signum()),
+        };
 
         self.filled_cost = arrival
             .zip(direction)
@@ -166,16 +211,32 @@ impl SessionRow {
             .map(|(price, direction)| {
                 direction * (self.trading_volume * price - self.trading_value)
             });
-        self.residual_cost = arrival
-            .zip(final_mid)
-            .filter(|_| self.final_inventory.is_finite())
-            .map(|(arrival, final_mid)| self.final_inventory * (arrival - final_mid));
-        let initial_notional = arrival
-            .filter(|arrival| {
-                self.start_position.is_finite()
-                    && (self.start_position * arrival).abs() > f64::EPSILON
-            })
-            .map(|arrival| (self.start_position * arrival).abs());
+        self.residual_cost = match self.target_mode {
+            TargetMode::Quantity => arrival
+                .zip(final_mid)
+                .filter(|_| self.final_inventory.is_finite())
+                .map(|(arrival, final_mid)| self.final_inventory * (arrival - final_mid)),
+            TargetMode::Notional => arrival
+                .zip(final_mid)
+                .zip(direction)
+                .zip(self.target_notional)
+                .filter(|(_, target)| target.is_finite() && *target > 0.0)
+                .map(|(((arrival, final_mid), direction), target)| {
+                    let remaining = (target - self.trading_value).max(0.0);
+                    direction * remaining / arrival * (arrival - final_mid)
+                }),
+        };
+        let initial_notional = match self.target_mode {
+            TargetMode::Quantity => arrival
+                .filter(|arrival| {
+                    self.start_position.is_finite()
+                        && (self.start_position * arrival).abs() > f64::EPSILON
+                })
+                .map(|arrival| (self.start_position * arrival).abs()),
+            TargetMode::Notional => self
+                .target_notional
+                .filter(|target| target.is_finite() && *target > f64::EPSILON),
+        };
         self.filled_cost_pct = self
             .filled_cost
             .zip(initial_notional)
@@ -251,6 +312,29 @@ mod tests {
         let row = costs(1_000.0, 400.0, 100.0, 90.0, 600.0, 100.0, 0.0);
         assert_eq!(row.residual_cost, Some(4_000.0));
         assert_eq!(row.implementation_shortfall_pct, Some(4.0));
+    }
+
+    #[test]
+    fn notional_sell_uses_target_value_for_completion_cost_basis() {
+        let mut row = costs(0.0, -8_000.0, 100.0, 90.0, 8_000.0, 101.0, 0.0);
+        row.target_mode = TargetMode::Notional;
+        row.target_notional = Some(1_000_000.0);
+        row.execution_side = Some(ExecutionSide::Sell);
+        row.compute_execution_costs();
+        assert_eq!(row.filled_cost, Some(-8_000.0));
+        assert_eq!(row.residual_cost, Some(19_200.0));
+        assert!((row.implementation_shortfall_pct.unwrap() - 1.12).abs() < 1e-12);
+    }
+
+    #[test]
+    fn notional_buy_flips_cost_direction() {
+        let mut row = costs(0.0, 5_000.0, 100.0, 100.0, 5_000.0, 99.0, 0.0);
+        row.target_mode = TargetMode::Notional;
+        row.target_notional = Some(500_000.0);
+        row.execution_side = Some(ExecutionSide::Buy);
+        row.compute_execution_costs();
+        assert_eq!(row.filled_cost, Some(-5_000.0));
+        assert_eq!(row.implementation_shortfall_pct, Some(-1.0));
     }
 
     #[test]

@@ -2,6 +2,7 @@
 
 use hftbacktest::prelude::*;
 use serde::{Deserialize, Serialize};
+use execlab_core::{ExecutionSide, ExecutionTarget, TargetMode};
 
 use crate::alpha::Alpha;
 
@@ -20,6 +21,12 @@ pub struct Params {
     pub start_time_seconds: i64,
     pub time_taken_seconds: f64,
     pub trade_frequency_seconds: f64,
+    #[serde(default)]
+    pub target_mode: TargetMode,
+    #[serde(default)]
+    pub target_notional: Option<f64>,
+    #[serde(default)]
+    pub side: Option<ExecutionSide>,
 }
 
 fn seconds_to_ns(seconds: f64) -> Option<i64> {
@@ -42,6 +49,27 @@ fn slice_quantity(target: f64, time_taken_ns: i64, frequency_ns: i64) -> Option<
     let slices = time_taken_ns.checked_add(frequency_ns - 1)? / frequency_ns;
     let slices = slices.max(1) as f64;
     Some(((target / slices) / ROUND_LOT).ceil() * ROUND_LOT)
+}
+
+fn submission_count(time_taken_ns: i64, frequency_ns: i64) -> Option<i64> {
+    (time_taken_ns > 0 && frequency_ns > 0)
+        .then(|| time_taken_ns.checked_add(frequency_ns - 1))
+        .flatten()
+        .map(|n| (n / frequency_ns).max(1))
+}
+
+fn notional_slice_quantity(target: f64, executed: f64, price: f64, slices: i64) -> Option<f64> {
+    if !target.is_finite() || target <= 0.0 || !executed.is_finite() || !price.is_finite()
+        || price <= 0.0 || slices <= 0
+    {
+        return None;
+    }
+    let remaining = target - executed;
+    if remaining <= 0.0 {
+        return None;
+    }
+    let slice_value = (target / slices as f64).min(remaining);
+    Some((slice_value / price / ROUND_LOT).ceil() * ROUND_LOT)
 }
 
 fn advance_to<MD, B>(hbt: &mut B, target_ts: i64) -> bool
@@ -71,6 +99,14 @@ where
 impl Alpha for A {
     type Params = Params;
 
+    fn execution_target(p: &Params) -> Option<ExecutionTarget> {
+        (p.target_mode == TargetMode::Notional).then_some(ExecutionTarget {
+            mode: TargetMode::Notional,
+            side: p.side?,
+            notional: p.target_notional,
+        })
+    }
+
     fn search_space() -> Vec<Params> {
         let mut params = Vec::new();
         for start_time_seconds in [10 * 3_600] {
@@ -80,6 +116,9 @@ impl Alpha for A {
                         start_time_seconds,
                         time_taken_seconds,
                         trade_frequency_seconds,
+                        target_mode: TargetMode::Quantity,
+                        target_notional: None,
+                        side: None,
                     });
                 }
             }
@@ -124,12 +163,15 @@ impl Alpha for A {
             return;
         }
 
-        let target = hbt.position(0).abs();
-        let Some(slice_qty) = slice_quantity(target, time_taken_ns, frequency_ns) else {
-            drain::<MD, B>(hbt);
-            hbt.close().unwrap();
-            return;
+        let quantity_slice = match p.target_mode {
+            TargetMode::Quantity => slice_quantity(
+                hbt.position(0).abs(),
+                time_taken_ns,
+                frequency_ns,
+            ),
+            TargetMode::Notional => None,
         };
+        let slices = submission_count(time_taken_ns, frequency_ns).unwrap_or(1);
 
         let mut order_id = 0;
         let mut next_trade_ts = start_ts.max(hbt.current_timestamp());
@@ -139,18 +181,38 @@ impl Alpha for A {
                 return;
             }
 
-            let position = hbt.position(0);
-            if position.abs() <= f64::EPSILON {
-                break;
-            }
             let depth = hbt.depth(0);
             let (best_bid, best_ask) = (depth.best_bid(), depth.best_ask());
             if best_bid > 0.0 && best_ask > best_bid {
+                let position = hbt.position(0);
+                let price = (best_bid + best_ask) / 2.0;
+                let (side, qty) = match p.target_mode {
+                    TargetMode::Quantity => {
+                        if position.abs() <= f64::EPSILON {
+                            break;
+                        }
+                        let Some(slice_qty) = quantity_slice else { break };
+                        let side = if position < 0.0 {
+                            ExecutionSide::Buy
+                        } else {
+                            ExecutionSide::Sell
+                        };
+                        (side, slice_qty.min(position.abs()))
+                    }
+                    TargetMode::Notional => {
+                        let Some(target) = p.target_notional else { break };
+                        let executed = hbt.state_values(0).trading_value;
+                        let Some(qty) = notional_slice_quantity(target, executed, price, slices)
+                        else {
+                            break;
+                        };
+                        let Some(side) = p.side else { break };
+                        (side, qty)
+                    }
+                };
                 hbt.clear_inactive_orders(Some(0));
                 order_id += 1;
-                let qty = slice_qty.min(position.abs());
-                let price = (best_bid + best_ask) / 2.0;
-                if position < 0.0 {
+                if side == ExecutionSide::Buy {
                     let _ = hbt.submit_buy_order(
                         0,
                         order_id,
@@ -199,5 +261,12 @@ mod tests {
     #[test]
     fn partial_window_adds_a_submission_opportunity() {
         assert_eq!(slice_quantity(1_000.0, 61, 30), Some(400.0));
+    }
+
+    #[test]
+    fn notional_slice_rounds_up_to_board_lot_and_caps_value_before_rounding() {
+        assert_eq!(notional_slice_quantity(1_000_000.0, 0.0, 20_000.0, 10), Some(100.0));
+        assert_eq!(notional_slice_quantity(1_000_000.0, 950_000.0, 20_000.0, 10), Some(100.0));
+        assert_eq!(notional_slice_quantity(1_000_000.0, 1_000_000.0, 20_000.0, 10), None);
     }
 }

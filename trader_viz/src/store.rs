@@ -155,8 +155,21 @@ fn validate_draft(draft: &ScenarioDraft) -> Result<(), String> {
     if draft.order.symbol.trim().is_empty() {
         return Err("symbol is required".into());
     }
-    if !draft.order.quantity.is_finite() || draft.order.quantity <= 0.0 {
-        return Err("quantity must be positive".into());
+    match draft.order.target_mode {
+        crate::model::TargetMode::Quantity
+            if !draft.order.quantity.is_finite() || draft.order.quantity <= 0.0 =>
+        {
+            return Err("quantity must be positive".into());
+        }
+        crate::model::TargetMode::Notional
+            if !draft
+                .order
+                .notional
+                .is_some_and(|v| v.is_finite() && v > 0.0) =>
+        {
+            return Err("notional target must be positive".into());
+        }
+        _ => {}
     }
     if draft.strategies.len() != 1 || draft.strategies[0].name != "twap_sell" {
         return Err("prototype requires twap_sell".into());
@@ -208,7 +221,9 @@ mod tests {
             order: OrderSpec {
                 symbol: "VCB".into(),
                 side: Side::Buy,
+                target_mode: crate::model::TargetMode::Quantity,
                 quantity: 1_000.0,
+                notional: None,
             },
             strategies: vec![StrategySpec {
                 name: "twap_sell".into(),
