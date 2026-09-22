@@ -150,7 +150,6 @@ fn params(draft: &crate::model::Scenario) -> Value {
                     "trade_frequency_seconds": trade_frequency_seconds,
                 });
                 if draft.order.target_mode == crate::model::TargetMode::Notional {
-                    value["target_mode"] = json!("notional");
                     value["target_notional"] = json!(draft.order.notional);
                     value["side"] = json!(match draft.order.side {
                         crate::model::Side::Buy => "buy",
@@ -161,7 +160,14 @@ fn params(draft: &crate::model::Scenario) -> Value {
             }
         }
     }
-    json!({"strategy": "twap_sell", "params": values})
+    json!({"strategy": alpha_name(draft), "params": values})
+}
+
+fn alpha_name(scenario: &crate::model::Scenario) -> &'static str {
+    match scenario.order.target_mode {
+        crate::model::TargetMode::Quantity => "twap_sell_quantity_target",
+        crate::model::TargetMode::Notional => "twap_sell_notional_target",
+    }
 }
 
 fn start_run(app: &Arc<App>, scenario_id: &str, mode: &str) -> Result<RunRecord, String> {
@@ -236,7 +242,9 @@ fn start_run(app: &Arc<App>, scenario_id: &str, mode: &str) -> Result<RunRecord,
         command.arg("--release");
     }
     command
-        .args(["--bin", "execlab", "--", "twap_sell", "--data-dir"])
+        .args(["--bin", "execlab", "--"])
+        .arg(alpha_name(&scenario))
+        .arg("--data-dir")
         .arg(&market_dir)
         .arg("--out")
         .arg(&output_dir)
@@ -533,22 +541,39 @@ fn route(app: &Arc<App>, method: &str, target: &str, body: &[u8]) -> Response {
         let sid = q.get("scenario");
         let hash = q.get("hash");
         let session = q.get("session");
-        let target = || -> Result<(PathBuf, String, String), String> {
+        let target = || -> Result<(PathBuf, String, String, String), String> {
             let sid = sid.ok_or("missing scenario")?;
             let scenario = app.store.get(sid)?;
+            let preferred = alpha_name(&scenario);
             let run = scenario
                 .latest_successful_run_id
                 .ok_or("no successful run")?;
             let hash = hash.ok_or("missing hash")?.to_string();
             let session = session.ok_or("missing session")?.to_string();
-            Ok((app.store.run_dir(sid, &run).join("results"), hash, session))
+            let out = app.store.run_dir(sid, &run).join("results");
+            let alpha = [
+                preferred,
+                "twap_sell_quantity_target",
+                "twap_sell_notional_target",
+                "twap_sell",
+            ]
+            .into_iter()
+            .find(|name| out.join(name).join(&hash).is_dir())
+            .unwrap_or(preferred)
+            .to_string();
+            Ok((
+                out,
+                alpha,
+                hash,
+                session,
+            ))
         }();
-        let (out, hash, session) = match target {
+        let (out, alpha, hash, session) = match target {
             Ok(v) => v,
             Err(e) => return error(400, e),
         };
         let replay = out
-            .join("twap_sell")
+            .join(&alpha)
             .join(&hash)
             .join("replay")
             .join(&app.config.timeframe)
@@ -569,7 +594,7 @@ fn route(app: &Arc<App>, method: &str, target: &str, body: &[u8]) -> Response {
             let output = Command::new("cargo")
                 .current_dir(&app.config.workspace)
                 .args(["run", "--bin", "exec_replay", "--"])
-                .arg(format!("twap_sell/{hash}"))
+                .arg(format!("{alpha}/{hash}"))
                 .arg("--data-dir")
                 .arg(&app.config.data_dir)
                 .arg("--out")

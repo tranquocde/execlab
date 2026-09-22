@@ -20,6 +20,21 @@ pub trait Alpha {
         None
     }
 
+    fn has_data_dependent_initial_position() -> bool {
+        false
+    }
+
+    /// Resolve a data-dependent initial position before the real simulation.
+    /// The default keeps the position supplied by `BacktestConfig`.
+    fn resolve_initial_position<MD, B>(_hbt: &mut B, _p: &Self::Params) -> Option<f64>
+    where
+        MD: MarketDepth,
+        B: Bot<MD>,
+        B::Error: std::fmt::Debug,
+    {
+        None
+    }
+
     /// The trading logic.
     ///
     /// Generic over `Bot` on purpose: the same source compiles against the

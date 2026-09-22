@@ -1,4 +1,4 @@
-//! Time-window TWAP for full-day market-data sessions.
+//! Quantity-target TWAP for full-day market-data sessions.
 
 use hftbacktest::prelude::*;
 use serde::{Deserialize, Serialize};

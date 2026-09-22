@@ -197,7 +197,15 @@ fn stats(intervals: &[IntervalResult]) -> Stats {
 }
 
 pub fn load(results: &Path) -> Result<Performance, String> {
-    let alpha_dir = results.join("twap_sell");
+    let alpha_dir = [
+        "twap_sell_quantity_target",
+        "twap_sell_notional_target",
+        "twap_sell",
+    ]
+    .into_iter()
+    .map(|alpha| results.join(alpha))
+    .find(|path| path.is_dir())
+    .ok_or_else(|| format!("no TWAP results under {}", results.display()))?;
     let mut strategies = Vec::new();
     let mut warnings = Vec::new();
     for dir in child_dirs(&alpha_dir) {

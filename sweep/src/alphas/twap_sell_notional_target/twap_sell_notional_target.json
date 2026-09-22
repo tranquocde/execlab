@@ -1,0 +1,22 @@
+{
+  "data_dir": "vps_data",
+  "output_dir": "output",
+  "backtest_config": {
+    "exchange": "EffectivePartialFillExchange",
+    "queue_model": "RiskAdverseQueueModel",
+    "asset_type": "LinearAsset",
+    "contract_size": 1.0,
+    "tick_size": 0.01,
+    "lot_size": 0.001,
+    "latency_model": "ConstantLatency",
+    "entry_latency_ns": 10000000,
+    "response_latency_ns": 10000000,
+    "fee_model": "TradingValueFeeModel<CommonFees>",
+    "maker_fee": 0.005,
+    "taker_fee": 0.005,
+    "initial_balance": 0.0,
+    "initial_position": 0.0,
+    "last_trades_capacity": 1000,
+    "terminal_valuation": "FinalMidPrice"
+  }
+}

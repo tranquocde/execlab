@@ -92,7 +92,14 @@ pub fn replay<A: Alpha>(args: Args) -> Result<ReplayResult, String> {
     }
 
     let data = engine::load_session(&src);
-    let backtest = engine::build_backtest(data, &backtest_config);
+    let mut session_config = backtest_config.clone();
+    if A::has_data_dependent_initial_position() {
+        let mut probe = engine::build_backtest(data.clone(), &backtest_config);
+        if let Some(position) = A::resolve_initial_position(&mut probe, &params) {
+            session_config.initial_position = position;
+        }
+    }
+    let backtest = engine::build_backtest(data, &session_config);
     let initial_position = backtest.position(0);
     let mut hbt = Observed::new(backtest);
 
@@ -105,7 +112,7 @@ pub fn replay<A: Alpha>(args: Args) -> Result<ReplayResult, String> {
         &src,
         src.parent().unwrap_or(args.data_root),
         &hbt,
-        &backtest_config,
+        &session_config,
         initial_position,
         hbt.arrival_mid_price,
     );

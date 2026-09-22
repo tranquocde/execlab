@@ -171,8 +171,13 @@ fn validate_draft(draft: &ScenarioDraft) -> Result<(), String> {
         }
         _ => {}
     }
-    if draft.strategies.len() != 1 || draft.strategies[0].name != "twap_sell" {
-        return Err("prototype requires twap_sell".into());
+    if draft.strategies.len() != 1
+        || !matches!(
+            draft.strategies[0].name.as_str(),
+            "twap_sell" | "twap_sell_quantity_target" | "twap_sell_notional_target"
+        )
+    {
+        return Err("prototype requires a supported TWAP strategy".into());
     }
     if !matches!(
         draft.historical_selection.mode.as_str(),
