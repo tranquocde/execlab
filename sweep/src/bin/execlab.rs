@@ -35,6 +35,7 @@ struct Args {
     list: bool,
     status: bool,
     params_file: Option<String>,
+    initial_balance: Option<f64>,
     initial_position: Option<f64>,
     progress_file: Option<String>,
     sessions_file: Option<String>,
@@ -51,6 +52,7 @@ fn parse_args() -> Args {
         list: false,
         status: false,
         params_file: None,
+        initial_balance: None,
         initial_position: None,
         progress_file: None,
         sessions_file: None,
@@ -75,6 +77,14 @@ fn parse_args() -> Args {
                         .expect("--initial-position needs a value")
                         .parse()
                         .expect("--initial-position needs a number"),
+                )
+            }
+            "--initial-balance" => {
+                a.initial_balance = Some(
+                    it.next()
+                        .expect("--initial-balance needs a value")
+                        .parse()
+                        .expect("--initial-balance needs a number"),
                 )
             }
             "--progress-file" => {
@@ -204,6 +214,9 @@ fn main() {
             .unwrap_or_else(|error| panic!("{}: {error}", e.name));
         if let Some(position) = args.initial_position {
             config.backtest_config.initial_position = position;
+        }
+        if let Some(balance) = args.initial_balance {
+            config.backtest_config.initial_balance = balance;
         }
         let data_dir = args.data_dir.as_deref().unwrap_or(&config.data_dir);
         let out_dir = args.out_dir.as_deref().unwrap_or(&config.output_dir);

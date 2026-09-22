@@ -264,7 +264,16 @@ fn start_run(app: &Arc<App>, scenario_id: &str, mode: &str) -> Result<RunRecord,
                 crate::model::TargetMode::Notional => 0.0,
             }
             .to_string(),
-        )
+        );
+    if scenario.order.target_mode == crate::model::TargetMode::Notional {
+        let target = scenario.order.notional.unwrap_or(0.0);
+        let balance = match scenario.order.side {
+            crate::model::Side::Buy => target,
+            crate::model::Side::Sell => -target,
+        };
+        command.arg("--initial-balance").arg(balance.to_string());
+    }
+    command
         .stdout(Stdio::from(log))
         .stderr(Stdio::from(stderr));
     let mut child = command

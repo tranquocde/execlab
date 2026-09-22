@@ -119,15 +119,8 @@ pub fn sweep<A, Pop>(
             // ---- inner: this batch's params, on resident data ----
             for p in &todo {
                 machine_progress.begin();
-                let mut session_config = config.clone();
-                if A::has_data_dependent_initial_position() {
-                    let mut probe = build_backtest(data.clone(), config);
-                    if let Some(position) = A::resolve_initial_position(&mut probe, p) {
-                        session_config.initial_position = position;
-                    }
-                }
                 // `data.clone()` = Rc refcount bump, not a copy of the events.
-                let mut hbt = SweepObserved::new(build_backtest(data.clone(), &session_config));
+                let mut hbt = SweepObserved::new(build_backtest(data.clone(), config));
                 let start_position = hbt.position(0);
 
                 A::run(&mut hbt, p);
@@ -136,7 +129,7 @@ pub fn sweep<A, Pop>(
                     file,
                     data_root,
                     &hbt,
-                    &session_config,
+                    config,
                     start_position,
                     hbt.arrival_mid_price(),
                 );

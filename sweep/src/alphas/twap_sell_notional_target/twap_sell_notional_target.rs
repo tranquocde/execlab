@@ -58,12 +58,6 @@ where MD: MarketDepth, B: Bot<MD>, B::Error: std::fmt::Debug {
     }
 }
 
-fn signed_target(target: f64, price: f64, side: ExecutionSide) -> Option<f64> {
-    if !target.is_finite() || target <= 0.0 || !price.is_finite() || price <= 0.0 { return None; }
-    let qty = (target / price / BOARD_LOT).floor() * BOARD_LOT;
-    (qty > 0.0).then_some(match side { ExecutionSide::Buy => -qty, ExecutionSide::Sell => qty })
-}
-
 fn drain<MD, B>(hbt: &mut B)
 where MD: MarketDepth, B: Bot<MD>, B::Error: std::fmt::Debug {
     while hbt.elapse(SAMPLE_NS).unwrap() != ElapseResult::EndOfData {}
@@ -80,13 +74,6 @@ impl Alpha for A {
 
     fn execution_target(p: &Params) -> Option<ExecutionTarget> {
         Some(ExecutionTarget { mode: TargetMode::Notional, side: p.side, notional: Some(p.target_notional) })
-    }
-
-    fn has_data_dependent_initial_position() -> bool { true }
-
-    fn resolve_initial_position<MD, B>(hbt: &mut B, p: &Params) -> Option<f64>
-    where MD: MarketDepth, B: Bot<MD>, B::Error: std::fmt::Debug {
-        signed_target(p.target_notional, arrival::<MD, B>(hbt, p)?, p.side)
     }
 
     fn run<MD, B>(hbt: &mut B, p: &Params)
@@ -110,7 +97,7 @@ impl Alpha for A {
             if remaining > 0.0 && bid.is_finite() && ask.is_finite() && ask > bid {
                 let executable = match p.side { ExecutionSide::Buy => ask, ExecutionSide::Sell => bid };
                 let cap = (remaining / executable / BOARD_LOT).floor() * BOARD_LOT;
-                let qty = fixed_qty.min(cap).min(hbt.position(0).abs());
+                let qty = fixed_qty.min(cap);
                 if qty < BOARD_LOT { break; }
                 hbt.clear_inactive_orders(Some(0));
                 order_id += 1;
@@ -125,15 +112,5 @@ impl Alpha for A {
         }
         drain::<MD, B>(hbt);
         hbt.close().unwrap();
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    #[test]
-    fn signs_and_rounds_target() {
-        assert_eq!(signed_target(105_000.0, 1_000.0, ExecutionSide::Sell), Some(100.0));
-        assert_eq!(signed_target(105_000.0, 1_000.0, ExecutionSide::Buy), Some(-100.0));
     }
 }
